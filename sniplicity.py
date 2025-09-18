@@ -23,6 +23,7 @@ VAR_START = r"\-\-"
 VAR_END = r"\-\-"
 snippets: Dict[str, List[str]] = {}
 defglob: Dict[str, str] = {}
+templates: Dict[str, List[str]] = {}
 verbose_cli = False
 
 # Markdown configuration
@@ -77,7 +78,7 @@ def parse_line(line: str) -> Optional[List[str]]:
     # Compile regex patterns once
     DIRECTIVE_PATTERN = re.compile(r'^\s*\<\!\-\-\s+(.*?)\s+\-\-\>')
     IDENTIFIER_PATTERN = re.compile(r'^[-\w.]+$')
-    ID_COMMANDS = {"copy", "cut", "paste", "set", "global"}
+    ID_COMMANDS = {"copy", "cut", "paste", "set", "global", "template"}
     
     # Match directive
     if not (match := DIRECTIVE_PATTERN.match(line.strip())):
@@ -111,6 +112,50 @@ def parse_value(parts: List[str]) -> str:
     if len(parts) > 2:
         return " ".join(parts[2:])
     return ""
+
+def parse_markdown_meta(markdown_text: str) -> Dict[str, any]:
+    """
+    Parses the first markdown metadata block (YAML frontmatter style) into a dictionary.
+    Supports # comments and comma-separated lists.
+    """
+    lines = markdown_text.splitlines()
+    in_meta = False
+    meta = {}
+    
+    for line in lines:
+        line = line.strip()
+        if line == '---':
+            if not in_meta:
+                in_meta = True
+                continue
+            else:
+                break
+        if not in_meta:
+            continue
+        if not line or line.startswith('#'):
+            continue
+        if ':' in line:
+            key, value = line.split(':', 1)
+            key = key.strip()
+            value = value.strip()
+            # Remove inline comment after value
+            if '#' in value:
+                value = value.split('#', 1)[0].strip()
+            # Convert comma-separated values to list
+            if ',' in value:
+                value_list = [v.strip() for v in value.split(',') if v.strip()]
+                meta[key] = value_list
+            else:
+                # Convert booleans and numbers
+                if value.lower() == 'true':
+                    meta[key] = True
+                elif value.lower() == 'false':
+                    meta[key] = False
+                elif value.isdigit():
+                    meta[key] = int(value)
+                else:
+                    meta[key] = value
+    return meta
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -195,23 +240,47 @@ class FileInfo:
         self.is_markdown = is_markdown
         self.data: List[str] = []
         self.def_vars: Dict[str, str] = {}
+        self.meta_vars: Dict[str, any] = {}  # Store markdown metadata
         self.output_rel_path = ""  # Will be set by build function
 
     def load(self) -> bool:
+        verbose(f"Loading file: {self.filename} (is_markdown: {self.is_markdown})")
         try:
             with open(self.file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
                 if self.is_markdown:
-                    # Convert markdown to HTML
-                    html = markdown.markdown(
-                        content,
-                        extensions=MD_EXTENSIONS,
-                        extension_configs=MD_EXTENSION_CONFIGS
-                    )
+                    # Extract metadata from markdown before processing
+                    self.meta_vars = parse_markdown_meta(content)
+                    verbose(f"  Found metadata in {self.filename}: {list(self.meta_vars.keys())}")
                     
-                    # Only wrap in HTML structure if no HTML tags present
-                    if not re.search(r'<html|<!DOCTYPE|<body', content, re.IGNORECASE):
-                        html = f"""<!DOCTYPE html>
+                    # Check if a template is specified in metadata
+                    template_name = self.meta_vars.get('template')
+                    verbose(f"  Template name from metadata: '{template_name}'")
+                    verbose(f"  Available templates: {list(templates.keys())}")
+                    if template_name and template_name in templates:
+                        verbose(f"  Using template '{template_name}' for {self.filename}")
+                        # Process the template with the markdown content
+                        html = process_template(templates[template_name], self)
+                    else:
+                        if template_name:
+                            verbose(f"  Template '{template_name}' not found. Available templates: {list(templates.keys())}")
+                        # Use default processing
+                        # Remove metadata block from content before markdown processing
+                        content_without_meta = self._strip_metadata_block(content)
+                        
+                        # Replace metadata variables in the markdown content BEFORE processing
+                        content_with_vars = self._replace_metadata_vars(content_without_meta)
+                        
+                        # Convert markdown to HTML
+                        html = markdown.markdown(
+                            content_with_vars,
+                            extensions=MD_EXTENSIONS,
+                            extension_configs=MD_EXTENSION_CONFIGS
+                        )
+                        
+                        # Only wrap in HTML structure if no HTML tags present
+                        if not re.search(r'<html|<!DOCTYPE|<body', content, re.IGNORECASE):
+                            html = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
@@ -231,6 +300,42 @@ class FileInfo:
         except OSError:
             warning(f"Cannot read file {Fore.CYAN}{self.file_path}{Style.RESET_ALL}")
             return False
+
+    def _strip_metadata_block(self, content: str) -> str:
+        """Remove the first metadata block (between --- markers) from content"""
+        lines = content.splitlines()
+        in_meta = False
+        content_start = 0
+        
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if line == '---':
+                if not in_meta:
+                    in_meta = True
+                    continue
+                else:
+                    # Found the end of metadata block
+                    content_start = i + 1
+                    break
+        
+        # Return content without the metadata block
+        return '\n'.join(lines[content_start:])
+
+    def _replace_metadata_vars(self, content: str) -> str:
+        """Replace metadata variables in content before markdown processing"""
+        if not self.meta_vars:
+            return content
+        
+        for key, value in self.meta_vars.items():
+            if isinstance(value, list):
+                replacement = ', '.join(str(v) for v in value)
+            else:
+                replacement = str(value)
+            
+            pattern = f"{VAR_START}{re.escape(key)}{VAR_END}"
+            content = re.sub(pattern, replacement, content)
+        
+        return content
 
     def save(self, output_dir: str, content: str) -> bool:
         try:
@@ -252,6 +357,90 @@ class FileInfo:
             error(f"Cannot write file {Fore.CYAN}{output_path}{Style.RESET_ALL}: {str(e)}")
             return False
 
+def process_template(template_content: List[str], file_info: 'FileInfo') -> str:
+    """Process a fresh copy of template with snippets and variables for this specific file"""
+    # Work with a fresh copy of the template for this file
+    template_lines = template_content.copy()
+    processed_lines = []
+    
+    # First, process any snippets in the template
+    for line in template_lines:
+        parts = parse_line(line)
+        if parts and parts[0] == "paste":
+            # Try to paste snippet
+            if parts[1] in snippets:
+                processed_lines.extend(snippets[parts[1]])
+            else:
+                warning(f"Template references unknown snippet '{parts[1]}'")
+                processed_lines.append(line)
+        else:
+            processed_lines.append(line)
+    
+    # Join the processed template
+    template_text = '\n'.join(processed_lines)
+    
+    # Replace variables (both metadata and regular variables) in the template
+    template_with_vars = do_replacements(template_text, file_info.def_vars, file_info.meta_vars)
+    
+    # Process the markdown content for this specific file
+    with open(file_info.file_path, 'r', encoding='utf-8') as f:
+        file_content = f.read()
+    content_without_meta = file_info._strip_metadata_block(file_content)
+    content_with_vars = file_info._replace_metadata_vars(content_without_meta)
+    
+    # Convert markdown content to HTML
+    markdown_html = markdown.markdown(
+        content_with_vars,
+        extensions=MD_EXTENSIONS,
+        extension_configs=MD_EXTENSION_CONFIGS
+    )
+    
+    # Replace {{content}} placeholder with the processed markdown
+    final_html = template_with_vars.replace('{{content}}', markdown_html)
+    
+    return final_html
+
+def get_file_list(source_dir: str) -> List[Tuple[str, str, bool]]:
+    """
+    Returns a list of tuples (relative_path, filename, is_markdown) for all processable files
+    relative_path is the path relative to source_dir, including any subfolders
+    """
+    try:
+        file_list = []
+        for root, dirs, files in os.walk(source_dir):
+            # Get path relative to source_dir
+            rel_path = os.path.relpath(root, source_dir)
+            rel_path_part = "" if rel_path == "." else rel_path
+            
+            for f in files:
+                # Check if it's a markdown file
+                if re.search(r'\.(md|mdown|markdown)$', f):
+                    # For markdown files, we'll change the extension to .html in the output
+                    file_list.append((rel_path_part, f, True))
+                # Check if it's an HTML/HTM/TXT file
+                elif re.search(r'(html|htm|txt)$', f):
+                    file_list.append((rel_path_part, f, False))
+        
+        return file_list
+    except OSError as e:
+        error(f"Cannot open source directory {Fore.CYAN}{source_dir}{Style.RESET_ALL}")
+        return []
+
+def get_file_as_array(filepath: str, source_dir: str) -> Optional[List[str]]:
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = f.read()
+    except OSError:
+        try:
+            full_path = os.path.join(source_dir, filepath)
+            with open(full_path, 'r', encoding='utf-8') as f:
+                data = f.read()
+        except OSError:
+            return None
+    
+    verbose(f"{Fore.GREEN}include {Fore.CYAN}{filepath}{Style.RESET_ALL}")
+    return data.splitlines()
+
 def process_includes(file_list: List[FileInfo]) -> None:
     """Process all file includes before anything else"""
     verbose(f"Processing {Fore.CYAN}includes{Style.RESET_ALL}...")
@@ -272,55 +461,60 @@ def process_includes(file_list: List[FileInfo]) -> None:
             i += 1
 
 def collect_snippets_and_globals(file_list: List[FileInfo]) -> None:
-    """First pass: collect all snippets and global variables from all files"""
-    global snippets, defglob
+    """First pass: collect all snippets, templates, and global variables from all files"""
+    global snippets, defglob, templates
     
-    verbose(f"Finding all {Fore.GREEN}snippets{Style.RESET_ALL} and globals...")
+    verbose(f"Finding all {Fore.GREEN}snippets{Style.RESET_ALL}, templates, and globals...")
     verbose("Processing files in this order:")
     for file_info in file_list:
         verbose(f"  {file_info.filename}")
     
-    # First collect all snippets
+    # First collect all snippets and templates
     for file_info in file_list:
-        # Stack to handle nested snippets: (name, block, nesting_level, start_line)
-        snippet_stack: List[Tuple[str, List[str], int, int]] = []
+        # Stack to handle nested snippets/templates: (name, block, type, nesting_level, start_line)
+        # type can be "copy", "cut", or "template"
+        content_stack: List[Tuple[str, List[str], str, int, int]] = []
         
         for i, line in enumerate(file_info.data):
             parts = parse_line(line)
             
             if parts:
-                if parts[0] in ["copy", "cut"]:
+                if parts[0] in ["copy", "cut", "template"]:
                     # Add to stack with current nesting level (= current stack depth)
-                    nesting_level = len(snippet_stack)
-                    snippet_stack.append((parts[1], [], nesting_level, i))
-                    verbose(f"  Start snippet '{parts[1]}' at level {nesting_level} in {file_info.filename}")
+                    nesting_level = len(content_stack)
+                    content_stack.append((parts[1], [], parts[0], nesting_level, i))
+                    verbose(f"  Start {parts[0]} '{parts[1]}' at level {nesting_level} in {file_info.filename}")
                 elif parts[0] == "end":
-                    if snippet_stack:
-                        # Get the last started snippet
-                        name, block, level, start_line = snippet_stack.pop()
-                        verbose(f"  End snippet '{name}' from level {level} in {file_info.filename}")
+                    if content_stack:
+                        # Get the last started item
+                        name, block, item_type, level, start_line = content_stack.pop()
+                        verbose(f"  End {item_type} '{name}' from level {level} in {file_info.filename}")
                         
-                        # Store the snippet
-                        snippets[name] = block.copy()
+                        # Store the item based on type
+                        if item_type == "template":
+                            templates[name] = block.copy()
+                            verbose(f"  Stored template '{name}' with {len(block)} lines")
+                        else:
+                            snippets[name] = block.copy()
                         
-                        # If there are still active snippets, add this entire snippet (including markers)
+                        # If there are still active items, add this entire block (including markers)
                         # to the parent's content
-                        if snippet_stack:
-                            parent_block = snippet_stack[-1][1]
+                        if content_stack:
+                            parent_block = content_stack[-1][1]
                             # Add the start marker
-                            copy_line = file_info.data[start_line]
-                            parent_block.append(copy_line)
+                            start_line_content = file_info.data[start_line]
+                            parent_block.append(start_line_content)
                             # Add all content
                             parent_block.extend(block)
                             # Add the end marker
                             parent_block.append(line)
                 else:
-                    # Add the line to all active snippet blocks
-                    for _, block, _, _ in snippet_stack:
+                    # Add the line to all active blocks
+                    for _, block, _, _, _ in content_stack:
                         block.append(line)
             else:
-                # Add non-directive line to all active snippet blocks
-                for _, block, _, _ in snippet_stack:
+                # Add non-directive line to all active blocks
+                for _, block, _, _, _ in content_stack:
                     block.append(line)
 
     # Then collect all globals
@@ -393,16 +587,16 @@ def process_snippets(file_list: List[FileInfo]) -> None:
             parts = parse_line(line)
             
             if parts and parts[0] == "paste":
-                verbose(f"Processing paste of '{parts[1]}' in {file_info.filename}")
-                verbose(f"Available snippets: {', '.join(snippets.keys())}")
-                verbose(f"Available local snippets: {', '.join(local_snippets.keys())}")
+#                verbose(f"Processing paste of '{parts[1]}' in {file_info.filename}")
+                # verbose(f"Available snippets: {', '.join(snippets.keys())}")
+                # verbose(f"Available local snippets: {', '.join(local_snippets.keys())}")
                 
                 # First try local snippets, then fall back to global
                 if parts[1] in local_snippets:
-                    verbose(f"Using local snippet '{parts[1]}'")
+#                    verbose(f"Using local snippet '{parts[1]}'")
                     new_file.extend(local_snippets[parts[1]])
                 elif parts[1] in snippets:
-                    verbose(f"Using global snippet '{parts[1]}'")
+#                    verbose(f"Using global snippet '{parts[1]}'")
                     new_file.extend(snippets[parts[1]])
                 else:
                     warning(f"Unable to {Fore.GREEN}insert {Fore.CYAN}{parts[1]}{Style.RESET_ALL} because snippet doesn't exist", file_info.filename, i + 1)
@@ -443,8 +637,11 @@ def process_variables(file_list: List[FileInfo], output_dir: str) -> None:
                 if write:
                     new_file.append(line)
         
-        # Replace variables
-        content = do_replacements("\n".join(new_file), file_info.def_vars)
+        # Replace variables (metadata already replaced for markdown files during load)
+        if file_info.is_markdown:
+            content = do_replacements("\n".join(new_file), file_info.def_vars)
+        else:
+            content = do_replacements("\n".join(new_file), file_info.def_vars, file_info.meta_vars)
         file_info.save(output_dir, content)
 
 def is_true(local_vars: Dict[str, str], key: str) -> bool:
@@ -457,9 +654,16 @@ def is_false(local_vars: Dict[str, str], key: str) -> bool:
         local_vars = defglob
     return key not in local_vars or not local_vars[key]
 
-def do_replacements(text: str, local_vars: Dict[str, str]) -> str:
-    # Create a dictionary with both global and local variables
+def do_replacements(text: str, local_vars: Dict[str, str], meta_vars: Dict[str, any] = None) -> str:
+    # Create a dictionary with global, local, and metadata variables
     all_vars = {**defglob, **local_vars}
+    if meta_vars:
+        # Convert metadata values to strings and add them
+        for key, value in meta_vars.items():
+            if isinstance(value, list):
+                all_vars[key] = ', '.join(str(v) for v in value)
+            else:
+                all_vars[key] = str(value)
     
     # Replace all variables
     for key, value in all_vars.items():
@@ -496,12 +700,38 @@ def build(source_dir: str, output_dir: str, watch_mode: bool) -> None:
                 file_list.append(file_info)
         
         # Reset global state
-        global snippets, defglob
-        snippets, defglob = {}, {}
+        global snippets, defglob, templates
+        snippets, defglob, templates = {}, {}, {}
+        
+        # First pass: collect templates and other content before loading files
+        verbose("Pre-loading files to collect templates...")
+        temp_file_list = []
+        for rel_path, filename, is_markdown in get_file_list(source_dir):
+            input_path = os.path.join(source_dir, rel_path, filename)
+            file_info = FileInfo(input_path, filename, is_markdown)
+            file_info.output_rel_path = rel_path
+            
+            # Load but don't process markdown yet
+            if file_info.load():
+                temp_file_list.append(file_info)
+        
+        # Collect templates from all files first
+        collect_snippets_and_globals(temp_file_list)
+        
+        # Now reload files with template processing
+        verbose("Reloading files with template processing...")
+        file_list = []
+        for rel_path, filename, is_markdown in get_file_list(source_dir):
+            input_path = os.path.join(source_dir, rel_path, filename)
+            file_info = FileInfo(input_path, filename, is_markdown)
+            file_info.output_rel_path = rel_path
+            
+            # Load and process (templates are now available)
+            if file_info.load():
+                file_list.append(file_info)
         
         # Process files in stages
         process_includes(file_list)
-        collect_snippets_and_globals(file_list)
         process_snippets(file_list)
         process_variables(file_list, output_dir)
         
