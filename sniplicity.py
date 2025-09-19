@@ -616,8 +616,8 @@ def process_variables(file_list: List[FileInfo], output_dir: str) -> None:
             file_content = '\n'.join(file_info.data)
             template_with_content = template_content.replace('{{content}}', file_content)
             
-            # Do variable replacements on the complete template
-            content = do_replacements(template_with_content, file_info.def_vars, file_info.meta_vars)
+            # Process conditionals and variables in the complete template
+            content = process_conditionals_and_variables(template_with_content, file_info.def_vars, file_info.meta_vars)
         else:
             # Use default HTML wrapper or no wrapper
             verbose(f"  Processing file without template: {file_info.filename}")
@@ -831,6 +831,42 @@ def is_false(local_vars: Dict[str, str], key: str) -> bool:
     if key not in local_vars:
         local_vars = defglob
     return key not in local_vars or not local_vars[key]
+
+def process_conditionals_and_variables(text: str, local_vars: Dict[str, str], meta_vars: Dict[str, any] = None) -> str:
+    """Process both conditionals and variable replacements in text"""
+    lines = text.splitlines()
+    processed_lines = []
+    write = True
+    cutting = False
+    
+    for line in lines:
+        parts = parse_line(line)
+        
+        if parts is not None:
+            if parts[0] == "if":
+                if parts[1].startswith("!"):
+                    var_name = parts[1][1:]
+                    write = is_false(local_vars, var_name)
+                else:
+                    write = is_true(local_vars, parts[1])
+            elif parts[0] == "endif":
+                write = True
+            elif parts[0] == "cut":
+                write = False
+                cutting = True
+            elif cutting and parts[0] == "end":
+                write = True
+                cutting = False
+            # Skip set commands in final output
+            elif parts[0] == "set":
+                continue
+        else:
+            if write:
+                processed_lines.append(line)
+    
+    # Now do variable replacements on the processed text
+    processed_text = '\n'.join(processed_lines)
+    return do_replacements(processed_text, local_vars, meta_vars)
 
 def do_replacements(text: str, local_vars: Dict[str, str], meta_vars: Dict[str, any] = None) -> str:
     # Create a dictionary with global, local, and metadata variables
