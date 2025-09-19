@@ -31,7 +31,7 @@ MD_EXTENSIONS = [
     'markdown.extensions.fenced_code',    # ```code blocks```
     'markdown.extensions.tables',         # Tables
     'markdown.extensions.toc',            # [TOC] insertion
-    'markdown.extensions.attr_list',      # {: #custom-id} attributes
+    # 'markdown.extensions.attr_list',      # {: #custom-id} attributes - REMOVED: conflicts with sniplicity variables
     'pymdownx.emoji',                     # :emoji: support
     'markdown.extensions.md_in_html'      # Markdown inside HTML blocks
 ]
@@ -253,53 +253,42 @@ class FileInfo:
                     self.meta_vars = parse_markdown_meta(content)
                     verbose(f"  Found metadata in {self.filename}: {list(self.meta_vars.keys())}")
                     
-                    # Check if a template is specified in metadata
-                    template_name = self.meta_vars.get('template')
-                    verbose(f"  Template name from metadata: '{template_name}'")
-                    verbose(f"  Available templates: {list(templates.keys())}")
-                    if template_name and template_name in templates:
-                        verbose(f"  Using template '{template_name}' for {self.filename}")
-                        # Process the template with the markdown content
-                        html = process_template(templates[template_name], self)
-                    else:
-                        if template_name:
-                            verbose(f"  Template '{template_name}' not found. Available templates: {list(templates.keys())}")
-                        # Use default processing
-                        # Remove metadata block from content before markdown processing
-                        content_without_meta = self._strip_metadata_block(content)
-                        
-                        # Replace metadata variables in the markdown content BEFORE processing
-                        content_with_vars = self._replace_metadata_vars(content_without_meta)
-                        
-                        # Convert markdown to HTML
-                        html = markdown.markdown(
-                            content_with_vars,
-                            extensions=MD_EXTENSIONS,
-                            extension_configs=MD_EXTENSION_CONFIGS
-                        )
-                        
-                        # Only wrap in HTML structure if no HTML tags present
-                        if not re.search(r'<html|<!DOCTYPE|<body', content, re.IGNORECASE):
-                            html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-</head>
-<body>
-{html}
-</body>
-</html>"""
+                    # Convert markdown to HTML immediately, preserving frontmatter
+                    content_without_meta = self._strip_metadata_block(content)
+                    html_content = markdown.markdown(
+                        content_without_meta,
+                        extensions=MD_EXTENSIONS,
+                        extension_configs=MD_EXTENSION_CONFIGS
+                    )
                     
-                    self.data = html.splitlines()
+                    # Replace the content with HTML (frontmatter was already extracted)
+                    content = html_content
+                    
                     # Change the output filename to .html
                     base = os.path.splitext(self.filename)[0]
                     self.filename = f"{base}.html"
-                else:
-                    self.data = content.splitlines()
+                    
+                    # Mark as no longer markdown since it's now HTML
+                    self.is_markdown = False
+                
+                self.data = content.splitlines()
             return True
         except OSError:
             warning(f"Cannot read file {Fore.CYAN}{self.file_path}{Style.RESET_ALL}")
             return False
+
+    def process_markdown_with_template(self) -> None:
+        """Process markdown content after all set commands have been processed"""
+        # Template processing now happens only during variable processing phase
+        # This method is kept for compatibility but does nothing
+        pass
+
+    def needs_template_processing(self) -> bool:
+        """Check if this markdown file needs template processing"""
+        if not self.is_markdown:
+            return False
+        template_name = self.def_vars.get('template') or self.meta_vars.get('template')
+        return template_name is not None and template_name in templates
 
     def _strip_metadata_block(self, content: str) -> str:
         """Remove the first metadata block (between --- markers) from content"""
@@ -356,49 +345,6 @@ class FileInfo:
         except OSError as e:
             error(f"Cannot write file {Fore.CYAN}{output_path}{Style.RESET_ALL}: {str(e)}")
             return False
-
-def process_template(template_content: List[str], file_info: 'FileInfo') -> str:
-    """Process a fresh copy of template with snippets and variables for this specific file"""
-    # Work with a fresh copy of the template for this file
-    template_lines = template_content.copy()
-    processed_lines = []
-    
-    # First, process any snippets in the template
-    for line in template_lines:
-        parts = parse_line(line)
-        if parts and parts[0] == "paste":
-            # Try to paste snippet
-            if parts[1] in snippets:
-                processed_lines.extend(snippets[parts[1]])
-            else:
-                warning(f"Template references unknown snippet '{parts[1]}'")
-                processed_lines.append(line)
-        else:
-            processed_lines.append(line)
-    
-    # Join the processed template
-    template_text = '\n'.join(processed_lines)
-    
-    # Replace variables (both metadata and regular variables) in the template
-    template_with_vars = do_replacements(template_text, file_info.def_vars, file_info.meta_vars)
-    
-    # Process the markdown content for this specific file
-    with open(file_info.file_path, 'r', encoding='utf-8') as f:
-        file_content = f.read()
-    content_without_meta = file_info._strip_metadata_block(file_content)
-    content_with_vars = file_info._replace_metadata_vars(content_without_meta)
-    
-    # Convert markdown content to HTML
-    markdown_html = markdown.markdown(
-        content_with_vars,
-        extensions=MD_EXTENSIONS,
-        extension_configs=MD_EXTENSION_CONFIGS
-    )
-    
-    # Replace {{content}} placeholder with the processed markdown
-    final_html = template_with_vars.replace('{{content}}', markdown_html)
-    
-    return final_html
 
 def get_file_list(source_dir: str) -> List[Tuple[str, str, bool]]:
     """
@@ -637,12 +583,244 @@ def process_variables(file_list: List[FileInfo], output_dir: str) -> None:
                 if write:
                     new_file.append(line)
         
-        # Replace variables (metadata already replaced for markdown files during load)
-        if file_info.is_markdown:
-            content = do_replacements("\n".join(new_file), file_info.def_vars)
+        # Replace variables - all files are now HTML
+        file_info.data = new_file
+        
+        # Check for template after all set commands have been processed
+        template_name = file_info.def_vars.get('template') or file_info.meta_vars.get('template')
+        
+        if template_name and template_name in templates:
+            # Use specified template
+            verbose(f"  Using template '{template_name}' for {file_info.filename}")
+            
+            # Get the template content and process snippets in it
+            template_lines = templates[template_name].copy()
+            processed_template = []
+            
+            # Process snippets (paste commands) in the template
+            for line in template_lines:
+                parts = parse_line(line)
+                if parts and parts[0] == "paste":
+                    if parts[1] in snippets:
+                        processed_template.extend(snippets[parts[1]])
+                    else:
+                        warning(f"Template references unknown snippet '{parts[1]}'")
+                        processed_template.append(line)
+                else:
+                    processed_template.append(line)
+            
+            # Convert template to string
+            template_content = '\n'.join(processed_template)
+            
+            # Replace {{content}} in template with the file content
+            file_content = '\n'.join(file_info.data)
+            template_with_content = template_content.replace('{{content}}', file_content)
+            
+            # Do variable replacements on the complete template
+            content = do_replacements(template_with_content, file_info.def_vars, file_info.meta_vars)
         else:
-            content = do_replacements("\n".join(new_file), file_info.def_vars, file_info.meta_vars)
+            # Use default HTML wrapper or no wrapper
+            verbose(f"  Processing file without template: {file_info.filename}")
+            content_text = "\n".join(file_info.data)
+            
+            # Only wrap in HTML structure if no HTML tags present
+            if not re.search(r'<html|<!DOCTYPE|<body', content_text, re.IGNORECASE):
+                content_text = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+</head>
+<body>
+{content_text}
+</body>
+</html>"""
+            
+            content = do_replacements(content_text, file_info.def_vars, file_info.meta_vars)
+        
         file_info.save(output_dir, content)
+
+def process_index_commands(file_list: List[FileInfo], source_dir: str) -> None:
+    """Process index commands to generate file listings"""
+    verbose("Processing index commands...")
+    
+    for file_info in file_list:
+        new_data = []
+        
+        for i, line in enumerate(file_info.data):
+            parts = parse_line(line)
+            
+            if parts and parts[0] == "index":
+                if len(parts) < 3:
+                    warning(f"Index command requires at least pattern and template: <!-- index pattern template -->", file_info.filename, i + 1)
+                    new_data.append(line)
+                    continue
+                
+                pattern = parts[1]  # e.g., "blog/*.md"
+                template_name = parts[2]  # e.g., "template_name"
+                sort_field = parts[3] if len(parts) > 3 else None  # e.g., "date"
+                
+                verbose(f"  Processing index: pattern='{pattern}' template='{template_name}' sort='{sort_field}'")
+                
+                # Check if template exists
+                if template_name not in templates:
+                    warning(f"Index template '{template_name}' not found", file_info.filename, i + 1)
+                    new_data.append(line)
+                    continue
+                
+                # Find matching files
+                matching_files = find_matching_files(pattern, source_dir)
+                verbose(f"  Found {len(matching_files)} matching files")
+                
+                # Load metadata from matching files
+                file_data = []
+                for file_path in matching_files:
+                    metadata = load_file_metadata(file_path, source_dir, source_dir)  # Using source_dir for both since we want relative paths
+                    if metadata:
+                        file_data.append(metadata)
+                
+                # Sort files if sort field is specified
+                if sort_field and file_data:
+                    file_data = sort_file_data(file_data, sort_field)
+                
+                # Generate HTML for each file using the template
+                for file_meta in file_data:
+                    index_html = process_index_template(templates[template_name], file_meta)
+                    new_data.extend(index_html.splitlines())
+                
+            else:
+                new_data.append(line)
+        
+        file_info.data = new_data
+
+def find_matching_files(pattern: str, source_dir: str) -> List[str]:
+    """Find files matching the glob pattern"""
+    import glob
+    
+    # Convert pattern to absolute path
+    full_pattern = os.path.join(source_dir, pattern)
+    matches = glob.glob(full_pattern)
+    
+    # Filter to only include supported file types
+    supported_extensions = ['.md', '.mdown', '.markdown', '.html', '.htm', '.txt']
+    filtered_matches = []
+    
+    for match in matches:
+        if any(match.lower().endswith(ext) for ext in supported_extensions):
+            filtered_matches.append(match)
+    
+    return filtered_matches
+
+def load_file_metadata(file_path: str, source_dir: str, output_dir: str) -> Optional[Dict[str, any]]:
+    """Load metadata from a file (frontmatter for markdown, variables for others)"""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Calculate relative path from source to output
+        rel_path = os.path.relpath(file_path, source_dir)
+        
+        # Convert to web path (change .md to .html, use forward slashes)
+        web_path = rel_path.replace('\\', '/')  # Normalize path separators
+        if any(web_path.lower().endswith(ext) for ext in ['.md', '.mdown', '.markdown']):
+            # Change markdown extension to .html
+            base = os.path.splitext(web_path)[0]
+            web_path = f"{base}.html"
+        
+        metadata = {
+            'filename': os.path.basename(file_path),
+            'filepath': web_path,  # Web-relative path for links
+            'sourcepath': file_path  # Keep original for reference
+        }
+        
+        # Check if it's a markdown file
+        if any(file_path.lower().endswith(ext) for ext in ['.md', '.mdown', '.markdown']):
+            # Parse markdown frontmatter - ONLY add file-specific metadata
+            frontmatter = parse_markdown_meta(content)
+            metadata.update(frontmatter)
+        
+        # DO NOT add global variables here - let template processing handle fallback
+        
+        return metadata
+        
+    except OSError:
+        warning(f"Cannot read file for indexing: {file_path}")
+        return None
+
+def sort_file_data(file_data: List[Dict[str, any]], sort_field: str) -> List[Dict[str, any]]:
+    """Sort file data by the specified field"""
+    def get_sort_key(file_meta):
+        value = file_meta.get(sort_field, "")
+        
+        # Handle date sorting (most recent first)
+        if sort_field.lower() in ['date', 'created', 'modified', 'published']:
+            # Try to parse as date string, fallback to string comparison
+            try:
+                from datetime import datetime
+                # Common date formats
+                for fmt in ['%Y-%m-%d', '%Y/%m/%d', '%m/%d/%Y', '%d/%m/%Y']:
+                    try:
+                        return datetime.strptime(str(value), fmt)
+                    except ValueError:
+                        continue
+                # If no format matches, use string comparison
+                return str(value)
+            except:
+                return str(value)
+        
+        # Handle numeric sorting
+        if isinstance(value, (int, float)):
+            return value
+        
+        # Try to convert to number
+        try:
+            return float(str(value))
+        except ValueError:
+            # String sorting (case-insensitive)
+            return str(value).lower()
+    
+    # Sort by date in descending order (most recent first), others ascending
+    reverse = sort_field.lower() in ['date', 'created', 'modified', 'published']
+    
+    return sorted(file_data, key=get_sort_key, reverse=reverse)
+
+def process_index_template(template_content: List[str], file_metadata: Dict[str, any]) -> str:
+    """Process template for a single file in the index"""
+    # Work with a fresh copy of the template
+    template_lines = template_content.copy()
+    processed_lines = []
+    
+    # Process any snippets in the template
+    for line in template_lines:
+        parts = parse_line(line)
+        if parts and parts[0] == "paste":
+            if parts[1] in snippets:
+                processed_lines.extend(snippets[parts[1]])
+            else:
+                warning(f"Index template references unknown snippet '{parts[1]}'")
+                processed_lines.append(line)
+        else:
+            processed_lines.append(line)
+    
+    # Join the processed template
+    template_text = '\n'.join(processed_lines)
+    
+    # Replace variables ONLY with file metadata (not global/page variables)
+    # Create a clean variable set with only this file's data and global fallbacks
+    file_vars = {**defglob, **file_metadata}  # Global vars as fallback, file vars override
+    
+    for key, value in file_vars.items():
+        if isinstance(value, list):
+            replacement = ', '.join(str(v) for v in value)
+        else:
+            replacement = str(value)
+        
+        pattern = f"{VAR_START}{re.escape(key)}{VAR_END}"
+        template_text = re.sub(pattern, replacement, template_text)
+    
+    # Clean up any remaining undefined variables
+    template_text = re.sub(f"{VAR_START}[-\\w.]+{VAR_END}", "", template_text)
+    
+    return template_text
 
 def is_true(local_vars: Dict[str, str], key: str) -> bool:
     if key not in local_vars:
@@ -732,6 +910,7 @@ def build(source_dir: str, output_dir: str, watch_mode: bool) -> None:
         
         # Process files in stages
         process_includes(file_list)
+        process_index_commands(file_list, source_dir)  # Process indexes before snippets and variables
         process_snippets(file_list)
         process_variables(file_list, output_dir)
         
