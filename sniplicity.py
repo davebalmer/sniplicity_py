@@ -110,7 +110,11 @@ def parse_line(line: str) -> Optional[List[str]]:
 
 def parse_value(parts: List[str]) -> str:
     if len(parts) > 2:
-        return " ".join(parts[2:])
+        value = " ".join(parts[2:])
+        # Handle quoted strings
+        if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+            value = value[1:-1]  # Remove quotes
+        return value
     return ""
 
 def parse_markdown_meta(markdown_text: str) -> Dict[str, any]:
@@ -468,7 +472,8 @@ def collect_snippets_and_globals(file_list: List[FileInfo]) -> None:
         for i, line in enumerate(file_info.data):
             parts = parse_line(line)
             if parts and parts[0] == "global":
-                defglob[parts[1]] = parse_value(parts) or True
+                value = parse_value(parts)
+                defglob[parts[1]] = value if len(parts) > 2 else True
                 verbose(f"  Found global '{parts[1]}' in {file_info.filename}")
 
 def process_snippets(file_list: List[FileInfo]) -> None:
@@ -564,13 +569,14 @@ def process_variables(file_list: List[FileInfo], output_dir: str) -> None:
             
             if parts is not None:
                 if parts[0] == "set":
-                    file_info.def_vars[parts[1]] = parse_value(parts) or True
+                    value = parse_value(parts)
+                    file_info.def_vars[parts[1]] = value if len(parts) > 2 else True
                 elif parts[0] == "if":
                     if parts[1].startswith("!"):
                         var_name = parts[1][1:]
-                        write = is_false(file_info.def_vars, var_name)
+                        write = is_false(file_info.def_vars, var_name, file_info.meta_vars)
                     else:
-                        write = is_true(file_info.def_vars, parts[1])
+                        write = is_true(file_info.def_vars, parts[1], file_info.meta_vars)
                 elif parts[0] == "endif":
                     write = True
                 elif parts[0] == "cut":
@@ -756,12 +762,28 @@ def sort_file_data(file_data: List[Dict[str, any]], sort_field: str) -> List[Dic
             # Try to parse as date string, fallback to string comparison
             try:
                 from datetime import datetime
-                # Common date formats
-                for fmt in ['%Y-%m-%d', '%Y/%m/%d', '%m/%d/%Y', '%d/%m/%Y']:
+                # Common date formats - try most specific first
+                date_formats = [
+                    '%Y-%m-%d',           # 2024-09-23
+                    '%Y/%m/%d',           # 2024/09/23
+                    '%m/%d/%Y',           # 09/23/2024
+                    '%d/%m/%Y',           # 23/09/2024
+                    '%b %d %Y',           # Sep 23 2024
+                    '%B %d %Y',           # September 23 2024
+                    '%b %d, %Y',          # Sep 23, 2024
+                    '%B %d, %Y',          # September 23, 2024
+                    '%d %b %Y',           # 23 Sep 2024
+                    '%d %B %Y',           # 23 September 2024
+                    '%Y-%m-%d %H:%M:%S',  # 2024-09-23 14:30:00
+                    '%Y-%m-%d %H:%M',     # 2024-09-23 14:30
+                ]
+                
+                for fmt in date_formats:
                     try:
                         return datetime.strptime(str(value), fmt)
                     except ValueError:
                         continue
+                        
                 # If no format matches, use string comparison
                 return str(value)
             except:
@@ -822,15 +844,43 @@ def process_index_template(template_content: List[str], file_metadata: Dict[str,
     
     return template_text
 
-def is_true(local_vars: Dict[str, str], key: str) -> bool:
-    if key not in local_vars:
-        local_vars = defglob
-    return key in local_vars and local_vars[key]
+def is_true(local_vars: Dict[str, str], key: str, meta_vars: Dict[str, any] = None) -> bool:
+    """Check if a variable is truthy. Checks local vars, then meta vars, then global vars."""
+    # Check local variables first
+    if key in local_vars:
+        value = local_vars[key]
+    # Then check metadata variables
+    elif meta_vars and key in meta_vars:
+        value = meta_vars[key]
+    # Finally check global variables
+    elif key in defglob:
+        value = defglob[key]
+    else:
+        # Variable doesn't exist, so it's falsy
+        return False
+    
+    # Now evaluate truthiness properly
+    return is_truthy(value)
 
-def is_false(local_vars: Dict[str, str], key: str) -> bool:
-    if key not in local_vars:
-        local_vars = defglob
-    return key not in local_vars or not local_vars[key]
+def is_false(local_vars: Dict[str, str], key: str, meta_vars: Dict[str, any] = None) -> bool:
+    """Check if a variable is falsy. Checks local vars, then meta vars, then global vars."""
+    return not is_true(local_vars, key, meta_vars)
+
+def is_truthy(value: any) -> bool:
+    """Evaluate if a value is truthy according to Python/web standards"""
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        # Empty string or string "false" (case insensitive) are falsy
+        return value.strip() != "" and value.strip().lower() not in ["false", "no", "0"]
+    if isinstance(value, (list, dict)):
+        return len(value) > 0
+    # For other types, use Python's built-in truthiness
+    return bool(value)
 
 def process_conditionals_and_variables(text: str, local_vars: Dict[str, str], meta_vars: Dict[str, any] = None) -> str:
     """Process both conditionals and variable replacements in text"""
@@ -846,9 +896,9 @@ def process_conditionals_and_variables(text: str, local_vars: Dict[str, str], me
             if parts[0] == "if":
                 if parts[1].startswith("!"):
                     var_name = parts[1][1:]
-                    write = is_false(local_vars, var_name)
+                    write = is_false(local_vars, var_name, meta_vars)
                 else:
-                    write = is_true(local_vars, parts[1])
+                    write = is_true(local_vars, parts[1], meta_vars)
             elif parts[0] == "endif":
                 write = True
             elif parts[0] == "cut":
