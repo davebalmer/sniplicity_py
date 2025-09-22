@@ -561,37 +561,12 @@ def process_variables(file_list: List[FileInfo], output_dir: str) -> None:
     verbose("Writing files...")
     
     for file_info in file_list:
-        write = True
-        new_file: List[str] = []
-        cutting = False
-        
-        for i, line in enumerate(file_info.data):
+        # First pass: extract all set commands to build local variables
+        for line in file_info.data:
             parts = parse_line(line)
-            
-            if parts is not None:
-                if parts[0] == "set":
-                    value = parse_value(parts)
-                    file_info.def_vars[parts[1]] = value if len(parts) > 2 else True
-                elif parts[0] == "if":
-                    if parts[1].startswith("!"):
-                        var_name = parts[1][1:]
-                        write = is_false(file_info.def_vars, var_name, file_info.meta_vars)
-                    else:
-                        write = is_true(file_info.def_vars, parts[1], file_info.meta_vars)
-                elif parts[0] == "endif":
-                    write = True
-                elif parts[0] == "cut":
-                    write = False
-                    cutting = True
-                elif cutting and parts[0] == "end":
-                    write = True
-                    cutting = False
-            else:
-                if write:
-                    new_file.append(line)
-        
-        # Replace variables - all files are now HTML
-        file_info.data = new_file
+            if parts and parts[0] == "set":
+                value = parse_value(parts)
+                file_info.def_vars[parts[1]] = value if len(parts) > 2 else True
         
         # Check for template after all set commands have been processed
         template_name = file_info.def_vars.get('template') or file_info.meta_vars.get('template')
@@ -609,7 +584,10 @@ def process_variables(file_list: List[FileInfo], output_dir: str) -> None:
                 parts = parse_line(line)
                 if parts and parts[0] == "paste":
                     if parts[1] in snippets:
-                        processed_template.extend(snippets[parts[1]])
+                        # Get the snippet content and process all directives
+                        snippet_content = '\n'.join(snippets[parts[1]])
+                        processed_snippet = process_content_with_directives(snippet_content, file_info.def_vars, file_info.meta_vars)
+                        processed_template.extend(processed_snippet.splitlines())
                     else:
                         warning(f"Template references unknown snippet '{parts[1]}'")
                         processed_template.append(line)
@@ -619,30 +597,34 @@ def process_variables(file_list: List[FileInfo], output_dir: str) -> None:
             # Convert template to string
             template_content = '\n'.join(processed_template)
             
-            # Replace {{content}} in template with the file content
-            file_content = '\n'.join(file_info.data)
-            template_with_content = template_content.replace('{{content}}', file_content)
+            # Replace {{content}} in template with the file content (processed)
+            file_content_text = '\n'.join(file_info.data)
+            processed_file_content = process_content_with_directives(file_content_text, file_info.def_vars, file_info.meta_vars)
+            template_with_content = template_content.replace('{{content}}', processed_file_content)
             
             # Process conditionals and variables in the complete template
-            content = process_conditionals_and_variables(template_with_content, file_info.def_vars, file_info.meta_vars)
+            content = process_content_with_directives(template_with_content, file_info.def_vars, file_info.meta_vars)
         else:
             # Use default HTML wrapper or no wrapper
             verbose(f"  Processing file without template: {file_info.filename}")
             content_text = "\n".join(file_info.data)
             
+            # Process all directives and variables
+            processed_content = process_content_with_directives(content_text, file_info.def_vars, file_info.meta_vars)
+            
             # Only wrap in HTML structure if no HTML tags present
-            if not re.search(r'<html|<!DOCTYPE|<body', content_text, re.IGNORECASE):
-                content_text = f"""<!DOCTYPE html>
+            if not re.search(r'<html|<!DOCTYPE|<body', processed_content, re.IGNORECASE):
+                content = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
 </head>
 <body>
-{content_text}
+{processed_content}
 </body>
 </html>"""
-            
-            content = do_replacements(content_text, file_info.def_vars, file_info.meta_vars)
+            else:
+                content = processed_content
         
         file_info.save(output_dir, content)
 
@@ -735,8 +717,7 @@ def load_file_metadata(file_path: str, source_dir: str, output_dir: str) -> Opti
         
         metadata = {
             'filename': os.path.basename(file_path),
-            'filepath': web_path,  # Web-relative path for links
-            'sourcepath': file_path  # Keep original for reference
+            'filepath': web_path  # Web-relative path for links
         }
         
         # Check if it's a markdown file
@@ -820,28 +801,26 @@ def process_index_template(template_content: List[str], file_metadata: Dict[str,
         parts = parse_line(line)
         if parts and parts[0] == "paste":
             if parts[1] in snippets:
-                processed_lines.extend(snippets[parts[1]])
+                # Get snippet content and process with file metadata
+                snippet_content = '\n'.join(snippets[parts[1]])
+                # Create a clean variable set with only this file's data and global fallbacks
+                file_vars = {**file_metadata}  # Don't include defglob here to avoid contamination
+                processed_snippet = process_content_with_directives(snippet_content, file_vars, file_metadata)
+                processed_lines.extend(processed_snippet.splitlines())
             else:
                 warning(f"Index template references unknown snippet '{parts[1]}'")
                 processed_lines.append(line)
         else:
             processed_lines.append(line)
     
-    # Join the processed template
+    # Join the processed template and do final variable replacement
     template_text = '\n'.join(processed_lines)
     
-    # Replace variables ONLY with file metadata (not global/page variables)
     # Create a clean variable set with only this file's data and global fallbacks
     file_vars = {**defglob, **file_metadata}  # Global vars as fallback, file vars override
     
-    for key, value in file_vars.items():
-        if isinstance(value, list):
-            replacement = ', '.join(str(v) for v in value)
-        else:
-            replacement = str(value)
-        
-        pattern = f"{VAR_START}{re.escape(key)}{VAR_END}"
-        template_text = re.sub(pattern, replacement, template_text)
+    # Use do_replacements for final variable substitution
+    template_text = do_replacements(template_text, file_vars, file_metadata)
     
     # Clean up any remaining undefined variables
     template_text = re.sub(f"{VAR_START}[-\\w.]+{VAR_END}", "", template_text)
@@ -886,9 +865,38 @@ def is_truthy(value: any) -> bool:
     # For other types, use Python's built-in truthiness
     return bool(value)
 
-def process_conditionals_and_variables(text: str, local_vars: Dict[str, str], meta_vars: Dict[str, any] = None) -> str:
-    """Process both conditionals and variable replacements in text"""
-    lines = text.splitlines()
+def process_inline_conditionals(text: str, local_vars: Dict[str, str], meta_vars: Dict[str, any] = None) -> str:
+    """Process inline conditional directives within a line of text"""
+    # Pattern to match inline conditionals like <!-- if var --> content <!-- endif -->
+    INLINE_IF_PATTERN = re.compile(r'<!--\s*if\s+([^>]+)\s*-->(.*?)<!--\s*endif\s*-->', re.DOTALL)
+    
+    def replace_conditional(match):
+        condition = match.group(1).strip()
+        content = match.group(2)
+        
+        # Handle negation
+        if condition.startswith("!"):
+            var_name = condition[1:].strip()
+            show_content = is_false(local_vars, var_name, meta_vars)
+        else:
+            show_content = is_true(local_vars, condition, meta_vars)
+        
+        return content if show_content else ""
+    
+    # Process all inline conditionals
+    while INLINE_IF_PATTERN.search(text):
+        text = INLINE_IF_PATTERN.sub(replace_conditional, text)
+    
+    return text
+
+def process_content_with_directives(content: str, local_vars: Dict[str, str], meta_vars: Dict[str, any] = None) -> str:
+    """Comprehensive processing of content including inline conditionals, block conditionals, and variable replacement"""
+    
+    # First process inline conditionals (for mixed content lines)
+    content = process_inline_conditionals(content, local_vars, meta_vars)
+    
+    # Then process block-level conditionals and other directives
+    lines = content.splitlines()
     processed_lines = []
     write = True
     cutting = False
@@ -903,22 +911,25 @@ def process_conditionals_and_variables(text: str, local_vars: Dict[str, str], me
                     write = is_false(local_vars, var_name, meta_vars)
                 else:
                     write = is_true(local_vars, parts[1], meta_vars)
+                continue  # Skip adding the if directive to output
             elif parts[0] == "endif":
                 write = True
+                continue  # Skip adding the endif directive to output
             elif parts[0] == "cut":
                 write = False
                 cutting = True
+                continue  # Skip adding cut directive to output
             elif cutting and parts[0] == "end":
                 write = True
                 cutting = False
-            # Skip set commands in final output
-            elif parts[0] == "set":
-                continue
-        else:
-            if write:
-                processed_lines.append(line)
+                continue  # Skip adding end directive to output
+            elif parts[0] in ["set", "copy", "paste", "global", "template", "include", "index"]:
+                continue  # Skip other directive commands that shouldn't appear in output
+        
+        if write:
+            processed_lines.append(line)
     
-    # Now do variable replacements on the processed text
+    # Finally do variable replacements on the processed text
     processed_text = '\n'.join(processed_lines)
     return do_replacements(processed_text, local_vars, meta_vars)
 
