@@ -19,8 +19,8 @@ import pymdownx.emoji
 import yaml
 
 # Global state
-VAR_START = r"\-\-"
-VAR_END = r"\-\-"
+VAR_START = r"\{\{"
+VAR_END = r"\}\}"
 snippets: Dict[str, List[str]] = {}
 defglob: Dict[str, str] = {}
 templates: Dict[str, List[str]] = {}
@@ -33,7 +33,8 @@ MD_EXTENSIONS = [
     'markdown.extensions.toc',            # [TOC] insertion
     # 'markdown.extensions.attr_list',      # {: #custom-id} attributes - REMOVED: conflicts with sniplicity variables
     'pymdownx.emoji',                     # :emoji: support
-    'markdown.extensions.md_in_html'      # Markdown inside HTML blocks
+    'markdown.extensions.md_in_html',     # Markdown inside HTML blocks
+    'markdown.extensions.smarty'          # Smart quotes: '' "" – — …
 ]
 MD_EXTENSION_CONFIGS = {
     'pymdownx.emoji': {
@@ -780,14 +781,17 @@ def sort_file_data(file_data: List[Dict[str, any]], sort_field: str) -> List[Dic
                 
                 for fmt in date_formats:
                     try:
-                        return datetime.strptime(str(value), fmt)
+                        parsed_date = datetime.strptime(str(value), fmt)
+                        # Return timestamp for consistent numeric comparison
+                        return parsed_date.timestamp()
                     except ValueError:
                         continue
                         
-                # If no format matches, use string comparison
-                return str(value)
+                # If no format matches, return a default timestamp (epoch)
+                # This ensures failed parses sort to the bottom
+                return 0.0
             except:
-                return str(value)
+                return 0.0
         
         # Handle numeric sorting
         if isinstance(value, (int, float)):
