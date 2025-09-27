@@ -1,0 +1,17 @@
+# Sniplicity - Static Site Generator Requirements
+# Install with: pip3 install -r requirements.txt
+
+# Terminal colors and styling
+colorama>=0.4.4
+
+# File system monitoring for watch mode
+watchdog>=2.1.0
+
+# Markdown processing
+markdown>=3.4.0
+
+# Extended markdown features (emoji support)
+pymdown-extensions>=9.0
+
+# YAML frontmatter parsing
+PyYAML>=6.0
