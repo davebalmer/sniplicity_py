@@ -49,6 +49,9 @@ class SniplicilyApp:
         # Handle window closing
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
+        # Auto-start watching and server if directories are configured
+        self.root.after(500, self.auto_start)
+        
     def load_config(self):
         """Load configuration from JSON file"""
         try:
@@ -152,6 +155,35 @@ class SniplicilyApp:
         self.log("Sniplicity Desktop started")
         if self.input_dir.get() and self.output_dir.get():
             self.log(f"Loaded configuration: {self.input_dir.get()} -> {self.output_dir.get()}")
+    
+    def auto_start(self):
+        """Auto-start watching and server if directories are configured"""
+        try:
+            if self.input_dir.get() and self.output_dir.get():
+                # Check if directories exist first
+                if not os.path.exists(self.input_dir.get()):
+                    self.log(f"Input directory does not exist: {self.input_dir.get()}")
+                    self.log("Please configure valid directories to enable auto-start")
+                    return
+                    
+                if not os.path.exists(self.output_dir.get()):
+                    self.log(f"Output directory does not exist: {self.output_dir.get()}")
+                    self.log("Please configure valid directories to enable auto-start")
+                    return
+                
+                self.log("Auto-starting watcher and server...")
+                
+                # Start watching automatically
+                self.start_watching()
+                
+                # Start server automatically after a delay
+                self.root.after(1500, lambda: self.start_server())
+            else:
+                self.log("Input or output directory not configured - skipping auto-start")
+                self.log("Please configure directories and manually start watching/server")
+        except Exception as e:
+            self.log(f"Error in auto-start: {str(e)}")
+            self.log("Auto-start failed, you can manually start watching and server")
     
     def browse_input_dir(self):
         """Browse for input directory"""
@@ -277,6 +309,8 @@ class SniplicilyApp:
             except Exception as e:
                 self.log(f"Watch error: {str(e)}")
                 self.status_label.config(text="Watch failed")
+                self.is_watching = False
+                self.watch_button.config(text="Start Watching")
         
         self.is_watching = True
         self.watch_button.config(text="Stop Watching")
