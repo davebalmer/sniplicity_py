@@ -1,0 +1,21 @@
+# Sniplicity Desktop App Requirements
+# Install with: pip3 install -r requirements.txt
+
+# Core Sniplicity dependencies
+colorama>=0.4.4
+watchdog>=2.1.0
+markdown>=3.4.0
+pymdown-extensions>=9.0
+PyYAML>=6.0
+
+# GUI framework (tkinter is included with Python)
+# No additional GUI dependencies needed - tkinter is built-in
+
+# HTTP server functionality (http.server is built-in)
+# No additional server dependencies needed
+
+# Threading and JSON support (built-in)
+# No additional dependencies needed
+
+# Note: This app uses only Python standard library modules for GUI and server
+# functionality to minimize external dependencies
