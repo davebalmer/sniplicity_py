@@ -448,17 +448,8 @@ def collect_snippets_and_globals(file_list: List[FileInfo]) -> None:
                         else:
                             snippets[name] = block.copy()
                         
-                        # If there are still active items, add this entire block (including markers)
-                        # to the parent's content
-                        if content_stack:
-                            parent_block = content_stack[-1][1]
-                            # Add the start marker
-                            start_line_content = file_info.data[start_line]
-                            parent_block.append(start_line_content)
-                            # Add all content
-                            parent_block.extend(block)
-                            # Add the end marker
-                            parent_block.append(line)
+                        # Don't add nested snippet content to parent - let the iterative 
+                        # processing handle paste directives instead
                 else:
                     # Add the line to all active blocks
                     for _, block, _, _, _ in content_stack:
@@ -529,33 +520,48 @@ def process_snippets(file_list: List[FileInfo]) -> None:
                     block.append(line)
         
         # Now process the file, using local snippets where available and skipping cut regions
-        new_file: List[str] = []
-        for i, line in enumerate(file_info.data):
-            # Check if this line is in a cut region
-            is_in_cut = any(start <= i <= end for start, end in cut_ranges)
-            if is_in_cut:
-                continue
-                
-            parts = parse_line(line)
-            
-            if parts and parts[0] == "paste":
-#                verbose(f"Processing paste of '{parts[1]}' in {file_info.filename}")
-                # verbose(f"Available snippets: {', '.join(snippets.keys())}")
-                # verbose(f"Available local snippets: {', '.join(local_snippets.keys())}")
-                
-                # First try local snippets, then fall back to global
-                if parts[1] in local_snippets:
-#                    verbose(f"Using local snippet '{parts[1]}'")
-                    new_file.extend(local_snippets[parts[1]])
-                elif parts[1] in snippets:
-#                    verbose(f"Using global snippet '{parts[1]}'")
-                    new_file.extend(snippets[parts[1]])
-                else:
-                    warning(f"Unable to {Fore.GREEN}insert {Fore.CYAN}{parts[1]}{Style.RESET_ALL} because snippet doesn't exist", file_info.filename, i + 1)
-            else:
-                new_file.append(line)
+        # Use iterative processing to handle nested paste directives
+        current_data = [line for i, line in enumerate(file_info.data) 
+                       if not any(start <= i <= end for start, end in cut_ranges)]
         
-        file_info.data = new_file
+        # Keep processing until no more paste directives are found
+        max_iterations = 10  # Prevent infinite loops
+        iteration = 0
+        
+        while iteration < max_iterations:
+            new_file: List[str] = []
+            found_paste = False
+            
+            for line in current_data:
+                parts = parse_line(line)
+                
+                if parts and parts[0] == "paste":
+                    found_paste = True
+                    # First try local snippets, then fall back to global
+                    if parts[1] in local_snippets:
+                        new_file.extend(local_snippets[parts[1]])
+                    elif parts[1] in snippets:
+                        new_file.extend(snippets[parts[1]])
+                    else:
+                        warning(f"Unable to {Fore.GREEN}insert {Fore.CYAN}{parts[1]}{Style.RESET_ALL} because snippet doesn't exist", file_info.filename)
+                        # Don't add the paste directive to output - remove it even if snippet doesn't exist
+                elif parts and parts[0] in ["copy", "cut", "template", "end"]:
+                    # Remove directive markers from output - they should not appear in final content
+                    pass
+                else:
+                    new_file.append(line)
+            
+            current_data = new_file
+            iteration += 1
+            
+            # If no paste directives were found, we're done
+            if not found_paste:
+                break
+        
+        if iteration >= max_iterations:
+            warning(f"Maximum snippet processing iterations reached", file_info.filename)
+        
+        file_info.data = current_data
 
 def process_variables(file_list: List[FileInfo], output_dir: str) -> None:
     verbose("Writing files...")

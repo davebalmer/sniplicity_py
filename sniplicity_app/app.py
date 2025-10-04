@@ -12,13 +12,16 @@ import socketserver
 from datetime import datetime
 import webbrowser
 
-# Add the core directory to the path so we can import sniplicity
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'core'))
+# Add the parent directory to the path so we can import the root sniplicity.py
+parent_dir = os.path.dirname(os.path.dirname(__file__))
+sys.path.insert(0, parent_dir)
 
 try:
-    from core import sniplicity
-except ImportError:
     import sniplicity
+except ImportError:
+    # Fallback to core directory if root import fails
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'core'))
+    from core import sniplicity
 
 class SniplicilyApp:
     def __init__(self, root):
