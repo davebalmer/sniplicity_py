@@ -120,32 +120,46 @@ def parse_value(parts: List[str]) -> str:
 
 def parse_markdown_meta(markdown_text: str) -> Dict[str, any]:
     """
-    Parses the first markdown metadata block (YAML frontmatter style) into a dictionary.
+    Parses YAML frontmatter from the very beginning of a markdown file.
+    YAML frontmatter must start at the first line with --- and end with ---.
     Supports # comments and comma-separated lists.
     """
     lines = markdown_text.splitlines()
-    in_meta = False
     meta = {}
     
-    for line in lines:
-        line = line.strip()
-        if line == '---':
-            if not in_meta:
-                in_meta = True
-                continue
-            else:
-                break
-        if not in_meta:
-            continue
+    # YAML frontmatter must start at the very first line
+    if not lines or lines[0].strip() != '---':
+        return meta
+    
+    # Look for the closing --- delimiter
+    closing_line = -1
+    for i in range(1, len(lines)):
+        if lines[i].strip() == '---':
+            closing_line = i
+            break
+    
+    # If no closing delimiter found, this isn't valid YAML frontmatter
+    if closing_line == -1:
+        return meta
+    
+    # Parse the YAML content between the delimiters
+    for i in range(1, closing_line):
+        line = lines[i].strip()
+        
+        # Skip empty lines and comments
         if not line or line.startswith('#'):
             continue
+            
+        # Parse key-value pairs
         if ':' in line:
             key, value = line.split(':', 1)
             key = key.strip()
             value = value.strip()
+            
             # Remove inline comment after value
             if '#' in value:
                 value = value.split('#', 1)[0].strip()
+            
             # Convert comma-separated values to list
             if ',' in value:
                 value_list = [v.strip() for v in value.split(',') if v.strip()]
@@ -160,6 +174,7 @@ def parse_markdown_meta(markdown_text: str) -> Dict[str, any]:
                     meta[key] = int(value)
                 else:
                     meta[key] = value
+    
     return meta
 
 def parse_args() -> argparse.Namespace:
@@ -296,24 +311,21 @@ class FileInfo:
         return template_name is not None and template_name in templates
 
     def _strip_metadata_block(self, content: str) -> str:
-        """Remove the first metadata block (between --- markers) from content"""
+        """Remove YAML frontmatter from the beginning of content if present"""
         lines = content.splitlines()
-        in_meta = False
-        content_start = 0
         
-        for i, line in enumerate(lines):
-            line = line.strip()
-            if line == '---':
-                if not in_meta:
-                    in_meta = True
-                    continue
-                else:
-                    # Found the end of metadata block
-                    content_start = i + 1
-                    break
+        # YAML frontmatter must start at the very first line
+        if not lines or lines[0].strip() != '---':
+            return content
         
-        # Return content without the metadata block
-        return '\n'.join(lines[content_start:])
+        # Look for the closing --- delimiter
+        for i in range(1, len(lines)):
+            if lines[i].strip() == '---':
+                # Found closing delimiter, return content after it
+                return '\n'.join(lines[i + 1:])
+        
+        # No closing delimiter found, return original content
+        return content
 
     def _replace_metadata_vars(self, content: str) -> str:
         """Replace metadata variables in content before markdown processing"""
