@@ -16,36 +16,39 @@ import (
 
 // FileInfo represents a file being processed
 type FileInfo struct {
-	InputPath     string
-	Filename      string
-	OutputRelPath string
-	IsMarkdown    bool
-	Content       []string
-	Metadata      map[string]interface{}
-	UsedSnippets  map[string]bool
+	InputPath       string
+	Filename        string
+	OutputRelPath   string
+	IsMarkdown      bool
+	Content         []string
+	Metadata        map[string]interface{}
+	UsedSnippets    map[string]bool
+	MarkdownImages  map[string]bool  // Track image URLs that came from markdown
 }
 
 // NewFileInfoRaw creates a new FileInfo instance for raw content loading
 func NewFileInfoRaw(inputPath, filename string, isMarkdown bool) *FileInfo {
 	return &FileInfo{
-		InputPath:    inputPath,
-		Filename:     filename,
-		IsMarkdown:   isMarkdown,
-		Content:      make([]string, 0),
-		Metadata:     make(map[string]interface{}),
-		UsedSnippets: make(map[string]bool),
+		InputPath:      inputPath,
+		Filename:       filename,
+		IsMarkdown:     isMarkdown,
+		Content:        make([]string, 0),
+		Metadata:       make(map[string]interface{}),
+		UsedSnippets:   make(map[string]bool),
+		MarkdownImages: make(map[string]bool),
 	}
 }
 
 // NewFileInfo creates a new FileInfo instance
 func NewFileInfo(inputPath, filename string, isMarkdown bool) *FileInfo {
 	return &FileInfo{
-		InputPath:    inputPath,
-		Filename:     filename,
-		IsMarkdown:   isMarkdown,
-		Content:      make([]string, 0),
-		Metadata:     make(map[string]interface{}),
-		UsedSnippets: make(map[string]bool),
+		InputPath:      inputPath,
+		Filename:       filename,
+		IsMarkdown:     isMarkdown,
+		Content:        make([]string, 0),
+		Metadata:       make(map[string]interface{}),
+		UsedSnippets:   make(map[string]bool),
+		MarkdownImages: make(map[string]bool),
 	}
 }
 
@@ -116,6 +119,12 @@ func (f *FileInfo) Load() error {
 
 // convertMarkdownToHTML converts markdown content to HTML matching Python's extensions exactly
 func (f *FileInfo) convertMarkdownToHTML() {
+	// Convert content lines back to markdown text
+	markdownText := strings.Join(f.Content, "\n")
+	
+	// Extract image URLs from markdown before conversion
+	f.extractMarkdownImages(markdownText)
+	
 	// Configure goldmark to match Python's markdown extensions
 	md := goldmark.New(
 		goldmark.WithExtensions(
@@ -136,9 +145,6 @@ func (f *FileInfo) convertMarkdownToHTML() {
 			html.WithUnsafe(),                // Allow raw HTML (matches Python's md_in_html)
 		),
 	)
-	
-	// Convert content lines back to markdown text
-	markdownText := strings.Join(f.Content, "\n")
 	
 	// Convert markdown to HTML
 	var buf bytes.Buffer
@@ -262,4 +268,60 @@ func parseSimpleYAML(yamlContent string) map[string]interface{} {
 	}
 	
 	return metadata
+}
+
+// extractMarkdownImages extracts image URLs from markdown content
+func (f *FileInfo) extractMarkdownImages(markdownText string) {
+	// Match markdown image syntax: ![alt](url) and ![alt](url "title")
+	imgRegex := regexp.MustCompile(`!\[.*?\]\(([^)]+)\)`)
+	matches := imgRegex.FindAllStringSubmatch(markdownText, -1)
+	
+	for _, match := range matches {
+		if len(match) > 1 {
+			// Extract URL (may have title after space)
+			url := strings.TrimSpace(match[1])
+			// Remove title if present (everything after first space)
+			if spaceIdx := strings.Index(url, " "); spaceIdx != -1 {
+				url = url[:spaceIdx]
+			}
+			// Remove quotes if present
+			url = strings.Trim(url, `"'`)
+			
+			// Only track local images (not external URLs)
+			if !strings.HasPrefix(strings.ToLower(url), "http://") && 
+			   !strings.HasPrefix(strings.ToLower(url), "https://") &&
+			   !strings.HasPrefix(strings.ToLower(url), "data:") {
+				f.MarkdownImages[url] = true
+			}
+		}
+	}
+	
+	// Also match HTML img tags embedded in markdown: <img src="url" ...>
+	htmlImgRegex := regexp.MustCompile(`(?i)<img\s+[^>]*\ssrc\s*=\s*["']([^"']+)["'][^>]*>`)
+	htmlMatches := htmlImgRegex.FindAllStringSubmatch(markdownText, -1)
+	
+	for _, match := range htmlMatches {
+		if len(match) > 1 {
+			url := strings.TrimSpace(match[1])
+			
+			// Only track local images (not external URLs)
+			if !strings.HasPrefix(strings.ToLower(url), "http://") && 
+			   !strings.HasPrefix(strings.ToLower(url), "https://") &&
+			   !strings.HasPrefix(strings.ToLower(url), "data:") {
+				f.MarkdownImages[url] = true
+			}
+		}
+	}
+	
+	// Also check metadata for image references (like frontmatter image: field)
+	if imageUrl, exists := f.Metadata["image"]; exists {
+		if url, ok := imageUrl.(string); ok && url != "" {
+			// Only track local images (not external URLs)
+			if !strings.HasPrefix(strings.ToLower(url), "http://") && 
+			   !strings.HasPrefix(strings.ToLower(url), "https://") &&
+			   !strings.HasPrefix(strings.ToLower(url), "data:") {
+				f.MarkdownImages[url] = true
+			}
+		}
+	}
 }

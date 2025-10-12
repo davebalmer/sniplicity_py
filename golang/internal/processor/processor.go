@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"sniplicity/internal/imgprocess"
 	"sniplicity/internal/parser"
 	"sniplicity/internal/types"
 
@@ -539,7 +540,7 @@ func (p *Processor) ProcessSnippets(fileInfo *types.FileInfo, snippets map[strin
 }
 
 // ProcessVariables processes variable substitution and writes the file
-func (p *Processor) ProcessVariables(fileInfo *types.FileInfo, outputDir string, templates map[string][]string, snippets map[string][]string, globals map[string]string, verbose bool) error {
+func (p *Processor) ProcessVariables(fileInfo *types.FileInfo, outputDir string, templates map[string][]string, snippets map[string][]string, globals map[string]string, imgSize bool, verbose bool) error {
 	// Collect local variables from set directives
 	localVars := make(map[string]string)
 	directives := parser.ParseDirectives(fileInfo.Content)
@@ -662,6 +663,26 @@ func (p *Processor) ProcessVariables(fileInfo *types.FileInfo, outputDir string,
 	
 	// Write file
 	finalContentStr := strings.Join(finalContent, "\n")
+	
+	// Process images if enabled and this file has markdown images to process
+	if imgSize && len(fileInfo.MarkdownImages) > 0 && (strings.HasSuffix(strings.ToLower(outputPath), ".html") || strings.HasSuffix(strings.ToLower(outputPath), ".htm")) {
+		if verbose {
+			fmt.Printf("  Processing markdown images for %s\n", outputPath)
+		}
+		// Get the directory of the HTML file for resolving relative image paths
+		htmlDir := filepath.Dir(outputPath)
+		// Process only images that came from markdown
+		processedContent, err := imgprocess.ProcessHTMLForMarkdownImages(finalContentStr, outputDir, htmlDir, fileInfo.MarkdownImages, verbose)
+		if err != nil {
+			if verbose {
+				fmt.Printf("  Warning: Image processing failed for %s: %v\n", outputPath, err)
+			}
+			// Continue with unprocessed content if image processing fails
+		} else {
+			finalContentStr = processedContent
+		}
+	}
+	
 	if err := os.WriteFile(outputPath, []byte(finalContentStr), 0644); err != nil {
 		return fmt.Errorf("cannot write file %s: %w", outputPath, err)
 	}

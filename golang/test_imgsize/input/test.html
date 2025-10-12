@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Image Size Test</title>
+</head>
+<body>
+    <h1>Testing Image Processing</h1>
+    
+    <!-- This img tag should get width/height attributes added -->
+    <img src="test.png" alt="Test image">
+    
+    <!-- This img tag already has width/height, should be unchanged -->
+    <img src="test.png" alt="Test image with existing dimensions" width="100" height="100">
+    
+    <!-- Picture element test -->
+    <picture>
+        <img src="test.png" alt="Picture element image">
+    </picture>
+    
+    <!-- Multiple images on one line -->
+    <p>Here are two images: <img src="test.png" alt="First"> and <img src="test.png" alt="Second"></p>
+</body>
+</html>

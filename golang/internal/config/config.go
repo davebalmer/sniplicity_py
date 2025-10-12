@@ -17,6 +17,7 @@ type Config struct {
 	Verbose    bool   `yaml:"verbose"`
 	Serve      bool   `yaml:"serve"`      // Enable web server and watch mode
 	Port       int    `yaml:"port"`       // Port for web server (default 3000)
+	ImgSize    bool   `yaml:"imgsize"`    // Automatically add width/height attributes to img tags (default: true)
 }
 
 // ConfigFile represents the structure saved to sniplicity.yaml
@@ -27,6 +28,7 @@ type ConfigFile struct {
 	Verbose   bool   `yaml:"verbose"`  
 	Serve     bool   `yaml:"serve"`
 	Port      int    `yaml:"port"`
+	ImgSize   *bool  `yaml:"imgsize"` // Pointer to distinguish between unset and false
 }
 
 // DefaultConfig returns a config with sensible defaults
@@ -38,6 +40,7 @@ func DefaultConfig() Config {
 		Verbose:   false,
 		Serve:     false,
 		Port:      3000,
+		ImgSize:   true,    // default to enabled
 	}
 }
 
@@ -88,6 +91,9 @@ func LoadConfigFromFile(projectDir string) (Config, error) {
 	cfg.Watch = configFile.Watch
 	cfg.Verbose = configFile.Verbose
 	cfg.Serve = configFile.Serve
+	if configFile.ImgSize != nil {
+		cfg.ImgSize = *configFile.ImgSize
+	}
 	if configFile.Port != 0 {
 		cfg.Port = configFile.Port
 	}
@@ -110,6 +116,7 @@ func (c *Config) SaveConfigToFile() error {
 		Verbose:   c.Verbose,
 		Serve:     c.Serve,
 		Port:      c.Port,
+		ImgSize:   &c.ImgSize,
 	}
 	
 	data, err := yaml.Marshal(configFile)

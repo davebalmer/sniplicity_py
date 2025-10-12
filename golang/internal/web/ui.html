@@ -79,6 +79,10 @@
                         <input type="checkbox" id="verbose" name="verbose" role="switch">
                         Verbose logging
                     </label>
+                    <label for="imgsize">
+                        <input type="checkbox" id="imgsize" name="imgsize" role="switch">
+                        Auto-add width/height to images
+                    </label>
                 </fieldset>
             </fieldset>
             
@@ -115,6 +119,7 @@
                 document.getElementById('watch').checked = currentConfig.watch || false;
                 document.getElementById('serve').checked = currentConfig.serve || false;
                 document.getElementById('verbose').checked = currentConfig.verbose || false;
+                document.getElementById('imgsize').checked = currentConfig.imgsize !== undefined ? currentConfig.imgsize : true;
                 
             } catch (error) {
                 showStatus('Error loading configuration: ' + error.message, 'error');
@@ -192,7 +197,8 @@
                 port: parseInt(document.getElementById('port').value),
                 watch: document.getElementById('watch').checked,
                 serve: document.getElementById('serve').checked,
-                verbose: document.getElementById('verbose').checked
+                verbose: document.getElementById('verbose').checked,
+                imgsize: document.getElementById('imgsize').checked
             };
             
             saveConfig(formData);

@@ -304,7 +304,7 @@ func (b *Builder) processVariables() error {
 	}
 
 	for _, fileInfo := range b.files {
-		err := b.processor.ProcessVariables(fileInfo, b.config.GetAbsoluteOutputDir(), b.templates, b.snippets, b.globals, b.config.Verbose)
+		err := b.processor.ProcessVariables(fileInfo, b.config.GetAbsoluteOutputDir(), b.templates, b.snippets, b.globals, b.config.ImgSize, b.config.Verbose)
 		if err != nil {
 			return err
 		}

@@ -28,6 +28,7 @@ func printBanner() {
 func main() {
 	// Command line flags
 	var cfg config.Config
+	var imgSizeFlag string
 	
 	flag.StringVar(&cfg.InputDir, "i", "", "source directory")
 	flag.StringVar(&cfg.InputDir, "in", "", "source directory")
@@ -41,6 +42,7 @@ func main() {
 	flag.BoolVar(&cfg.Serve, "serve", false, "start web server and enable watch mode")
 	flag.IntVar(&cfg.Port, "p", 3000, "port for web server (default 3000)")
 	flag.IntVar(&cfg.Port, "port", 3000, "port for web server (default 3000)")
+	flag.StringVar(&imgSizeFlag, "imgsize", "", "automatically add width/height to img tags (on/off, default: on)")
 	
 	var showVersion bool
 	flag.BoolVar(&showVersion, "version", false, "show version")
@@ -64,6 +66,19 @@ func main() {
 	
 	// Determine project directory and handle backward compatibility
 	var explicitInputDir, explicitOutputDir string
+	var explicitImgSize *bool
+	
+	// Parse imgsize flag
+	if imgSizeFlag != "" {
+		switch strings.ToLower(imgSizeFlag) {
+		case "on", "true", "1", "yes":
+			explicitImgSize = &[]bool{true}[0]
+		case "off", "false", "0", "no":
+			explicitImgSize = &[]bool{false}[0]
+		default:
+			log.Fatalf("Invalid value for --imgsize: %s (use 'on' or 'off')", imgSizeFlag)
+		}
+	}
 	
 	// Project directory is always the current working directory
 	projectDir, err := os.Getwd()
@@ -122,6 +137,9 @@ func main() {
 	}
 	if cfg.Port != 3000 { // Only override if explicitly set
 		fileCfg.Port = cfg.Port
+	}
+	if explicitImgSize != nil {
+		fileCfg.ImgSize = *explicitImgSize
 	}
 	
 	cfg = fileCfg

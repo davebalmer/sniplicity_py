@@ -84,6 +84,7 @@ type ConfigResponse struct {
 	Watch     bool   `json:"watch"`
 	Serve     bool   `json:"serve"`
 	Verbose   bool   `json:"verbose"`
+	ImgSize   bool   `json:"imgsize"`
 }
 
 // getConfig returns the current configuration as JSON
@@ -95,6 +96,7 @@ func (h *Handler) getConfig(w http.ResponseWriter, r *http.Request) {
 		Watch:     h.config.Watch,
 		Serve:     h.config.Serve,
 		Verbose:   h.config.Verbose,
+		ImgSize:   h.config.ImgSize,
 	}
 	
 	w.Header().Set("Content-Type", "application/json")
@@ -109,6 +111,7 @@ type ConfigRequest struct {
 	Watch     bool   `json:"watch"`
 	Serve     bool   `json:"serve"`
 	Verbose   bool   `json:"verbose"`
+	ImgSize   bool   `json:"imgsize"`
 }
 
 // saveConfig updates the configuration from the web interface
@@ -137,6 +140,7 @@ func (h *Handler) saveConfig(w http.ResponseWriter, r *http.Request) {
 	h.config.Watch = req.Watch
 	h.config.Serve = req.Serve
 	h.config.Verbose = req.Verbose
+	h.config.ImgSize = req.ImgSize
 	
 	// Save to file
 	if err := h.config.SaveConfigToFile(); err != nil {
