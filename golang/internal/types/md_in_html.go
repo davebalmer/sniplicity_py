@@ -9,6 +9,7 @@ import (
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/renderer/html"
+	"github.com/yuin/goldmark-emoji"
 )
 
 // preprocessMarkdownInHTML processes markdown content inside HTML tags with markdown attribute
@@ -28,6 +29,7 @@ func preprocessMarkdownInHTML(content string) string {
 			extension.Linkify,
 			extension.Typographer,
 			extension.DefinitionList,
+			emoji.Emoji,                      // Emoji support (:joy:, :heart:, etc.)
 		),
 		goldmark.WithParserOptions(
 			parser.WithAutoHeadingID(),

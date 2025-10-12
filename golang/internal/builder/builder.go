@@ -497,7 +497,9 @@ func (b *Builder) hostAndWatch() error {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("Server error: %v", err)
 		}
-	}()	// Handle graceful shutdown
+	}()
+	
+	// Handle graceful shutdown
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 
@@ -664,7 +666,9 @@ func (b *Builder) startWebServerOnly() error {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("Server error: %v", err)
 		}
-	}()	// Handle graceful shutdown
+	}()
+	
+	// Handle graceful shutdown
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 

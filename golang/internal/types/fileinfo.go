@@ -12,6 +12,7 @@ import (
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/renderer/html"
+	"github.com/yuin/goldmark-emoji"
 )
 
 // FileInfo represents a file being processed
@@ -135,6 +136,7 @@ func (f *FileInfo) convertMarkdownToHTML() {
 			extension.Linkify,                // Auto-link URLs
 			extension.Typographer,            // Smart quotes, dashes, etc. (matches Python's smarty)
 			extension.DefinitionList,         // Definition lists
+			emoji.Emoji,                      // Emoji support (:joy:, :heart:, etc.)
 		),
 		goldmark.WithParserOptions(
 			parser.WithAutoHeadingID(),       // Auto-generate heading IDs (matches Python's toc)
