@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <title>Sniplicity - Select Project</title>
+    <link rel="stylesheet" href="/sniplicity/css">
+    <link rel="stylesheet" href="/sniplicity/custom.css">
+</head>
+<body>
+    <main class="container">
+        <header>
+            <hgroup>
+                <h1>sniplicity</h1>
+                <p>Select a Project</p>
+            </hgroup>
+        </header>
+
+        <!-- Open a Project Section (moved to top) -->
+        <article>
+            <header>
+                <h3>Open a Project</h3>
+            </header>
+            
+            <form id="new-project-form">
+                <div style="display: flex; gap: 0.5rem; align-items: stretch;">
+                    <input type="text" id="new-project-path" placeholder="Enter project directory path..." required style="width: 100%;">
+                    <button type="submit" style="width: auto; flex-shrink: 0; min-width: fit-content;" data-tooltip="Open a new project by selecting its directory">Open</button>
+                </div>
+            </form>
+        </article>
+
+        <!-- Recent Projects Section -->
+        <article>
+            <header>
+                <h3>Recent Projects</h3>
+            </header>
+            
+            <div id="recent-projects-list">
+                <p>Loading recent projects...</p>
+            </div>
+        </article>
+        
+        <div id="status" role="alert" style="display: none;"></div>
+    </main>
+
+    <script>
+        let currentProject = null;
+        let recentProjects = [];
+        
+        // Load project data
+        async function loadProjects() {
+            try {
+                const response = await fetch('/sniplicity/api/projects');
+                const data = await response.json();
+                
+                currentProject = data.current_project;
+                recentProjects = data.recent_projects || [];
+                
+                // If there's a default project path (no valid config), populate input field
+                if (data.default_project_path) {
+                    document.getElementById('new-project-path').value = data.default_project_path;
+                }
+                
+                updateUI();
+            } catch (error) {
+                showStatus('Error loading projects: ' + error.message, 'error');
+            }
+        }
+        
+        // Update the UI with project data
+        function updateUI() {
+            // Update recent projects list (including current project at top)
+            const listElement = document.getElementById('recent-projects-list');
+            
+            // Combine current and recent projects, with current at top
+            let allProjects = [];
+            if (currentProject && currentProject.path) {
+                allProjects.push({
+                    ...currentProject,
+                    is_current: true
+                });
+            }
+            
+            // Add recent projects that are not the current project
+            recentProjects.forEach(project => {
+                if (!currentProject || project.path !== currentProject.path) {
+                    allProjects.push({
+                        ...project,
+                        is_current: false
+                    });
+                }
+            });
+            
+            if (allProjects.length === 0) {
+                listElement.innerHTML = '<p><em>No recent projects found. Use the form above to open your first project.</em></p>';
+                return;
+            }
+            
+            let html = '';
+            allProjects.forEach(project => {
+                const displayName = project.display_name || project.path.split('/').pop() || project.path;
+                const lastUsed = project.last_used ? new Date(project.last_used).toLocaleDateString() : 'Current';
+                const currentBadge = project.is_current ? '<span class="current-badge">Current</span>' : '';
+                
+                html += `
+                    <div class="grid">
+                        <div>
+                            <strong>${escapeHtml(displayName)}${currentBadge}</strong><br>
+                            <small>${escapeHtml(project.path)}</small><br>
+                            <small>Last used: ${lastUsed}</small>
+                        </div>
+                        <div>
+                            <button type="button" onclick="selectProject('${project.path}')" data-tooltip="Switch to this project">Open</button>
+                            <button type="button" class="secondary outline" onclick="editProject('${project.path}')" data-tooltip="Configure project settings">Configure</button>
+                            <button type="button" class="secondary outline" onclick="deleteProject('${project.path}')" data-tooltip="Remove from recent projects list">Remove</button>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            listElement.innerHTML = html;
+        }
+        
+        // Select a project and switch to it
+        async function selectProject(projectPath) {
+            try {
+                const response = await fetch('/sniplicity/api/projects/switch', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ project_path: projectPath })
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    showStatus('Switching to project...', 'success');
+                    // Update the recent projects list to reflect the change
+                    await loadProjects();
+                    // Redirect to home page after a brief delay
+                    setTimeout(() => {
+                        window.location.href = '/';
+                    }, 1000);
+                } else {
+                    showStatus('Error: ' + result.error, 'error');
+                }
+            } catch (error) {
+                showStatus('Error switching project: ' + error.message, 'error');
+            }
+        }
+        
+        // Edit/configure a project
+        function editProject(projectPath) {
+            // Switch to the project first, then redirect to settings
+            selectProjectForEdit(projectPath);
+        }
+        
+        async function selectProjectForEdit(projectPath) {
+            try {
+                const response = await fetch('/sniplicity/api/projects/switch', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ project_path: projectPath })
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    showStatus('Loading project settings...', 'success');
+                    // Redirect to settings page
+                    setTimeout(() => {
+                        window.location.href = '/sniplicity-project';
+                    }, 1000);
+                } else {
+                    showStatus('Error: ' + result.error, 'error');
+                }
+            } catch (error) {
+                showStatus('Error loading project: ' + error.message, 'error');
+            }
+        }
+        
+        // Delete a project from recent list (not from filesystem)
+        async function deleteProject(projectPath) {
+            const projectName = projectPath.split('/').pop() || projectPath;
+            const message = `Remove "${projectName}" from your recent projects list?\n\nPath: ${projectPath}\n\nNote: This will NOT delete any project files, only remove it from this list.`;
+            
+            if (!confirm(message)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/sniplicity/api/projects/remove', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ project_path: projectPath })
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    showStatus('Project removed from list', 'success');
+                    loadProjects(); // Reload the list
+                } else {
+                    showStatus('Error: ' + result.error, 'error');
+                }
+            } catch (error) {
+                showStatus('Error removing project: ' + error.message, 'error');
+            }
+        }
+        
+        // Handle new project form submission
+        document.getElementById('new-project-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const projectPath = document.getElementById('new-project-path').value.trim();
+            if (!projectPath) {
+                showStatus('Please enter a project path', 'error');
+                return;
+            }
+
+            // First, check if the directory has a sniplicity.yaml config file
+            try {
+                const checkResponse = await fetch('/sniplicity/api/projects/validate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ project_path: projectPath })
+                });
+                
+                const checkResult = await checkResponse.json();
+                
+                if (!checkResponse.ok) {
+                    showStatus('Error: ' + checkResult.error, 'error');
+                    return;
+                }
+                
+                // If no config file exists, warn the user
+                if (!checkResult.has_config) {
+                    const confirmed = confirm(
+                        `Warning: No sniplicity.yaml configuration file found in:\n${projectPath}\n\n` +
+                        `This appears to be an empty directory or not a sniplicity project.\n\n` +
+                        `Are you sure you want to proceed? You may need to create a configuration file manually.`
+                    );
+                    
+                    if (!confirmed) {
+                        return; // User cancelled
+                    }
+                }
+            } catch (error) {
+                showStatus('Error validating project: ' + error.message, 'error');
+                return;
+            }
+            
+            // Try to add and switch to the project
+            try {
+                const response = await fetch('/sniplicity/api/projects/add', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ project_path: projectPath })
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    showStatus('Project added! Switching...', 'success');
+                    // Clear the form
+                    document.getElementById('new-project-path').value = '';
+                    // Update the recent projects list first
+                    await loadProjects();
+                    // Then switch to the project
+                    setTimeout(() => {
+                        selectProject(projectPath);
+                    }, 500);
+                } else {
+                    showStatus('Error: ' + result.error, 'error');
+                }
+            } catch (error) {
+                showStatus('Error adding project: ' + error.message, 'error');
+            }
+        });
+        
+        // Utility functions
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // Show status message using Pico's styling
+        function showStatus(message, type) {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.style.display = 'block';
+            
+            // Use Pico's article styling for status messages
+            if (type === 'success') {
+                status.style.backgroundColor = 'var(--pico-ins-color)';
+                status.style.color = 'white';
+                status.style.padding = '1rem';
+                status.style.borderRadius = 'var(--pico-border-radius)';
+                status.style.marginTop = '1rem';
+            } else {
+                status.style.backgroundColor = 'var(--pico-del-color)';
+                status.style.color = 'white';
+                status.style.padding = '1rem';
+                status.style.borderRadius = 'var(--pico-border-radius)';
+                status.style.marginTop = '1rem';
+            }
+            
+            if (type === 'success') {
+                setTimeout(() => {
+                    status.style.display = 'none';
+                }, 5000);
+            }
+        }
+        
+        // Load projects on page load
+        document.addEventListener('DOMContentLoaded', loadProjects);
+    </script>
+</body>
+</html>

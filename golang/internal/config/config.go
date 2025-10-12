@@ -11,6 +11,7 @@ import (
 // Config holds all configuration options for sniplicity
 type Config struct {
 	ProjectDir string `yaml:"-"`          // Project root directory (where sniplicity.yaml lives)
+	Name       string `yaml:"name"`       // Optional friendly name for the project
 	InputDir   string `yaml:"input_dir"`  // Input directory relative to project root (default: "snip")
 	OutputDir  string `yaml:"output_dir"` // Output directory relative to project root (default: "www")
 	Watch      bool   `yaml:"watch"`
@@ -18,10 +19,12 @@ type Config struct {
 	Serve      bool   `yaml:"serve"`      // Enable web server and watch mode
 	Port       int    `yaml:"port"`       // Port for web server (default 3000)
 	ImgSize    bool   `yaml:"imgsize"`    // Automatically add width/height attributes to img tags (default: true)
+	LegacyMode bool   `yaml:"-"`          // True if explicit command line parameters were used (don't save to file)
 }
 
 // ConfigFile represents the structure saved to sniplicity.yaml
 type ConfigFile struct {
+	Name      string `yaml:"name"`
 	InputDir  string `yaml:"input_dir"`
 	OutputDir string `yaml:"output_dir"`
 	Watch     bool   `yaml:"watch"`
@@ -82,6 +85,9 @@ func LoadConfigFromFile(projectDir string) (Config, error) {
 	}
 	
 	// Apply config file values, using defaults if not specified
+	if configFile.Name != "" {
+		cfg.Name = configFile.Name
+	}
 	if configFile.InputDir != "" {
 		cfg.InputDir = configFile.InputDir
 	}
@@ -110,6 +116,7 @@ func (c *Config) SaveConfigToFile() error {
 	configPath := filepath.Join(c.ProjectDir, "sniplicity.yaml")
 	
 	configFile := ConfigFile{
+		Name:      c.Name,
 		InputDir:  c.InputDir,
 		OutputDir: c.OutputDir,
 		Watch:     c.Watch,
@@ -125,7 +132,7 @@ func (c *Config) SaveConfigToFile() error {
 	}
 	
 	// Add a header comment
-	header := "# Sniplicity Configuration\n# Project structure:\n#   input_dir: source files (default: snip)\n#   output_dir: built files (default: www)\n# See https://github.com/davebalmer/sniplicity for documentation\n\n"
+	header := "# Sniplicity Configuration\n# Project structure:\n#   name: friendly project name (optional)\n#   input_dir: source files (default: snip)\n#   output_dir: built files (default: www)\n# See https://github.com/davebalmer/sniplicity for documentation\n\n"
 	data = append([]byte(header), data...)
 	
 	if err := os.WriteFile(configPath, data, 0644); err != nil {

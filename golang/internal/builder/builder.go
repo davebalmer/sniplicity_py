@@ -19,27 +19,43 @@ import (
 	"sniplicity/internal/watcher"
 	"sniplicity/internal/web"
 
+	"github.com/atotto/clipboard"
 	"github.com/fatih/color"
+	"github.com/skratchdot/open-golang/open"
 )
 
 // Builder handles the main build process
 type Builder struct {
-	config     config.Config
-	files      []*types.FileInfo
-	snippets   map[string][]string
-	templates  map[string][]string
-	globals    map[string]string
-	processor  *processor.Processor
+	config       config.Config
+	files        []*types.FileInfo
+	snippets     map[string][]string
+	templates    map[string][]string
+	globals      map[string]string
+	processor    *processor.Processor
+	clipboardOnly bool // When true, copy URL to clipboard instead of opening browser
 }
 
 // New creates a new Builder instance
 func New(cfg config.Config) *Builder {
 	return &Builder{
-		config:    cfg,
-		snippets:  make(map[string][]string),
-		templates: make(map[string][]string),
-		globals:   make(map[string]string),
-		processor: processor.New(cfg.Verbose),
+		config:        cfg,
+		snippets:      make(map[string][]string),
+		templates:     make(map[string][]string),
+		globals:       make(map[string]string),
+		processor:     processor.New(cfg.Verbose),
+		clipboardOnly: false, // Default to opening browser
+	}
+}
+
+// NewWithClipboardOnly creates a new Builder instance that only copies URLs to clipboard
+func NewWithClipboardOnly(cfg config.Config) *Builder {
+	return &Builder{
+		config:        cfg,
+		snippets:      make(map[string][]string),
+		templates:     make(map[string][]string),
+		globals:       make(map[string]string),
+		processor:     processor.New(cfg.Verbose),
+		clipboardOnly: true, // Copy to clipboard instead of opening browser
 	}
 }
 
@@ -68,6 +84,17 @@ func (b *Builder) Build() error {
 	}
 
 	return nil
+}
+
+// StartProjectSelectionMode starts the web server without building any project
+// This is used when sniplicity is started without command line parameters
+func (b *Builder) StartProjectSelectionMode() error {
+	green := color.New(color.FgGreen, color.Bold)
+	cyan := color.New(color.FgCyan)
+	fmt.Printf("%s%s project selector starting at http://127.0.0.1:%d\n\n", 
+		green.Sprint("snip"), cyan.Sprint("licity"), b.config.Port)
+
+	return b.startWebServerOnly()
 }
 
 func (b *Builder) doBuild() error {
@@ -344,7 +371,7 @@ func (b *Builder) hostAndWatch() error {
 	fileServer := http.FileServer(http.Dir(b.config.GetAbsoluteOutputDir()))
 	
 	// Create web interface handler
-	webHandler := web.NewHandler(&b.config, func(newConfig *config.Config) error {
+	webHandler, err := web.NewHandler(&b.config, func(newConfig *config.Config) error {
 		// This callback is called when configuration is saved via web interface
 		// Update the config and trigger a rebuild
 		b.config = *newConfig
@@ -355,7 +382,31 @@ func (b *Builder) hostAndWatch() error {
 		}
 		
 		return nil
+	}, func(newProjectPath string) error {
+		// This callback is called when a project is switched via web interface
+		// Reload configuration from the new project and rebuild
+		newConfig, err := config.LoadConfigFromFile(newProjectPath)
+		if err != nil {
+			return fmt.Errorf("loading config from new project: %w", err)
+		}
+		
+		b.config = newConfig
+		
+		// Rebuild with the new project
+		if err := b.doBuild(); err != nil {
+			return fmt.Errorf("rebuild failed: %w", err)
+		}
+		
+		return nil
 	})
+	if err != nil {
+		return fmt.Errorf("creating web handler: %w", err)
+	}
+	
+	// Add current project to recent projects when starting server
+	if err := webHandler.AddCurrentProjectToRecent(); err != nil {
+		fmt.Printf("Warning: could not add current project to recent list: %v\n", err)
+	}
 	
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Handle sniplicity configuration interface
@@ -364,9 +415,15 @@ func (b *Builder) hostAndWatch() error {
 			return
 		}
 		
-		// Handle root path by serving index.html directly
+		// Handle root path
 		if r.URL.Path == "/" {
-			// Serve index.html file directly without redirect
+			// If not in legacy mode (no explicit command line params), redirect to project selector
+			if !b.config.LegacyMode {
+				http.Redirect(w, r, "/sniplicity", http.StatusTemporaryRedirect)
+				return
+			}
+			
+			// Legacy mode: serve index.html file directly without redirect
 			indexPath := filepath.Join(b.config.GetAbsoluteOutputDir(), "index.html")
 			http.ServeFile(w, r, indexPath)
 			return
@@ -415,13 +472,32 @@ func (b *Builder) hostAndWatch() error {
 	// Start server in goroutine
 	go func() {
 		cyan := color.New(color.FgCyan)
-		fmt.Printf("Starting web server at %s\n", cyan.Sprintf("http://127.0.0.1:%d", b.config.Port))
+		serverURL := fmt.Sprintf("http://127.0.0.1:%d", b.config.Port)
+		
+		fmt.Printf("Starting web server at %s\n", cyan.Sprint(serverURL))
+		
+		// Try to copy URL to clipboard
+		if err := clipboard.WriteAll(serverURL); err == nil {
+			fmt.Printf("✓ URL copied to clipboard - you can paste it anywhere!\n")
+		} else {
+			fmt.Printf("ℹ Copy this URL: %s\n", cyan.Sprint(serverURL))
+		}
+		
+		// Try to open browser automatically (unless clipboard-only mode)
+		if !b.clipboardOnly {
+			if err := open.Run(serverURL); err == nil {
+				fmt.Printf("✓ Opening in your default browser...\n")
+			} else {
+				fmt.Printf("ℹ Please open the URL above in your browser\n")
+			}
+		}
+		
+		fmt.Println()
+		
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("Server error: %v", err)
 		}
-	}()
-
-	// Handle graceful shutdown
+	}()	// Handle graceful shutdown
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 
@@ -432,6 +508,173 @@ func (b *Builder) hostAndWatch() error {
 	
 	green := color.New(color.FgGreen)
 	fmt.Printf("\n%s\n", green.Sprint("Stopping file watcher and web server..."))
+	
+	// Graceful shutdown with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	
+	if err := server.Shutdown(ctx); err != nil {
+		log.Printf("Server shutdown error: %v", err)
+	}
+	
+	fmt.Printf("%s\n", green.Sprint("Done!"))
+	return nil
+}
+
+// startWebServerOnly starts just the web server for project selection, without file watching
+func (b *Builder) startWebServerOnly() error {
+	var w *watcher.Watcher
+	
+	// Create file watcher if we have a project
+	if b.config.ProjectDir != "" && b.config.InputDir != "" {
+		var err error
+		w, err = watcher.New(b.config.GetAbsoluteInputDir(), func() {
+			if err := b.doBuild(); err != nil {
+				log.Printf("Build error: %v", err)
+			}
+		})
+		if err != nil {
+			log.Printf("Warning: Cannot create file watcher: %v", err)
+		} else {
+			defer w.Close()
+		}
+	}
+	// Create web interface handler
+	webHandler, err := web.NewHandler(&b.config, func(newConfig *config.Config) error {
+		// This callback is called when configuration is saved via web interface
+		// Update the config and trigger a rebuild
+		b.config = *newConfig
+		
+		// Rebuild with the new configuration
+		if err := b.doBuild(); err != nil {
+			return fmt.Errorf("rebuild failed: %w", err)
+		}
+		
+		return nil
+	}, func(newProjectPath string) error {
+		// This callback is called when a project is switched via web interface
+		// Reload configuration from the new project and rebuild
+		newConfig, err := config.LoadConfigFromFile(newProjectPath)
+		if err != nil {
+			return fmt.Errorf("loading config from new project: %w", err)
+		}
+		
+		b.config = newConfig
+		
+		// Rebuild with the new project
+		if err := b.doBuild(); err != nil {
+			return fmt.Errorf("rebuild failed: %w", err)
+		}
+		
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("creating web handler: %w", err)
+	}
+	
+	// Add current project to recent projects when starting server
+	if err := webHandler.AddCurrentProjectToRecent(); err != nil {
+		fmt.Printf("Warning: could not add current project to recent list: %v\n", err)
+	}
+	
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Handle sniplicity configuration interface
+		if strings.HasPrefix(r.URL.Path, "/sniplicity") {
+			webHandler.ServeHTTP(w, r)
+			return
+		}
+		
+		// If we have a project with an output directory, serve files from it
+		if b.config.ProjectDir != "" && b.config.OutputDir != "" {
+			outputDir := b.config.GetAbsoluteOutputDir()
+			
+			// Handle root path by serving index.html directly
+			if r.URL.Path == "/" {
+				indexPath := filepath.Join(outputDir, "index.html")
+				if _, err := os.Stat(indexPath); err == nil {
+					http.ServeFile(w, r, indexPath)
+					return
+				}
+			}
+			
+			// Serve other files from output directory
+			requestedPath := strings.TrimPrefix(r.URL.Path, "/")
+			filePath := filepath.Join(outputDir, requestedPath)
+			
+			// Security: clean the path to prevent directory traversal
+			filePath = filepath.Clean(filePath)
+			if !strings.HasPrefix(filePath, outputDir) {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
+			
+			// Check if the exact file exists
+			if info, err := os.Stat(filePath); err == nil && !info.IsDir() {
+				http.ServeFile(w, r, filePath)
+				return
+			}
+			
+			// If no file found, use default file server for directory listings, etc.
+			fileServer := http.FileServer(http.Dir(outputDir))
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		
+		// No project active - redirect to project selection
+		if r.URL.Path != "/sniplicity" {
+			http.Redirect(w, r, "/sniplicity", http.StatusTemporaryRedirect)
+			return
+		}
+	})
+
+	// Create HTTP server
+	server := &http.Server{
+		Addr:    fmt.Sprintf("127.0.0.1:%d", b.config.Port),
+		Handler: handler,
+	}
+
+	// Start server in goroutine
+	go func() {
+		cyan := color.New(color.FgCyan)
+		serverURL := fmt.Sprintf("http://127.0.0.1:%d", b.config.Port)
+		
+		// In project selection mode, direct users to the /sniplicity endpoint
+		projectSelectorURL := serverURL + "/sniplicity"
+		
+		fmt.Printf("Starting web server at %s\n", cyan.Sprint(serverURL))
+		
+		// Try to copy project selector URL to clipboard
+		if err := clipboard.WriteAll(projectSelectorURL); err == nil {
+			fmt.Printf("✓ Project selector URL copied to clipboard - you can paste it anywhere!\n")
+		} else {
+			fmt.Printf("ℹ Copy this URL: %s\n", cyan.Sprint(projectSelectorURL))
+		}
+		
+		// Try to open browser automatically to project selector (unless clipboard-only mode)
+		if !b.clipboardOnly {
+			if err := open.Run(projectSelectorURL); err == nil {
+				fmt.Printf("✓ Opening project selector in your default browser...\n")
+			} else {
+				fmt.Printf("ℹ Please open the URL above in your browser\n")
+			}
+		}
+		
+		fmt.Println()
+		
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("Server error: %v", err)
+		}
+	}()	// Handle graceful shutdown
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+
+	fmt.Printf("%s\n", color.New(color.FgYellow).Sprint("Press Ctrl+C to stop server"))
+	
+	// Wait for signal
+	<-c
+	
+	green := color.New(color.FgGreen)
+	fmt.Printf("\n%s\n", green.Sprint("Stopping web server..."))
 	
 	// Graceful shutdown with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

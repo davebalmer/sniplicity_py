@@ -47,6 +47,9 @@ func main() {
 	var showVersion bool
 	flag.BoolVar(&showVersion, "version", false, "show version")
 	
+	// Track if -s flag was explicitly provided (for clipboard-only behavior)
+	var explicitServeFlag bool
+	
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "\033[1;37mBuild simple static websites using:\033[0m\n\n")
 		fmt.Fprintf(os.Stderr, "  - snippets with \033[32m<!-- copy x -->\033[0m and \033[32m<!-- paste x -->\033[0m\n")
@@ -59,6 +62,14 @@ func main() {
 	
 	flag.Parse()
 	
+	// Check if -s flag was explicitly provided
+	for _, arg := range os.Args[1:] {
+		if arg == "-s" || arg == "-serve" {
+			explicitServeFlag = true
+			break
+		}
+	}
+	
 	if showVersion {
 		fmt.Printf("sniplicity %s\n", version)
 		return
@@ -67,6 +78,7 @@ func main() {
 	// Determine project directory and handle backward compatibility
 	var explicitInputDir, explicitOutputDir string
 	var explicitImgSize *bool
+	var isLegacyMode bool
 	
 	// Parse imgsize flag
 	if imgSizeFlag != "" {
@@ -80,18 +92,52 @@ func main() {
 		}
 	}
 	
-	// Project directory is always the current working directory
-	projectDir, err := os.Getwd()
-	if err != nil {
-		log.Fatalf("Cannot get current working directory: %v", err)
+	// Project directory determination
+	var projectDir string
+	var err error
+	
+	// Check for any explicit command line flags that indicate legacy usage
+	isLegacyMode = cfg.InputDir != "" || cfg.OutputDir != "" || cfg.Watch || cfg.Verbose || cfg.Port != 3000 || explicitImgSize != nil
+	
+	// Special case: if only -s (serve) flag is provided, treat as project selection mode, not legacy mode
+	if cfg.Serve && cfg.InputDir == "" && cfg.OutputDir == "" && !cfg.Watch && !cfg.Verbose && cfg.Port == 3000 && explicitImgSize == nil {
+		isLegacyMode = false
+	}
+	
+	// If no flags at all were provided, start in project selection mode with serve enabled
+	if !isLegacyMode && !cfg.Serve {
+		cfg.Serve = true
 	}
 	
 	if cfg.InputDir != "" || cfg.OutputDir != "" {
 		// Legacy mode: explicit -i and/or -o flags provided
 		explicitInputDir = cfg.InputDir
 		explicitOutputDir = cfg.OutputDir
+		
+		// In legacy mode, determine project directory from input directory
+		if cfg.InputDir != "" {
+			// Use parent directory of input directory as project directory
+			inputAbsPath, err := filepath.Abs(cfg.InputDir)
+			if err != nil {
+				log.Fatalf("Cannot get absolute path for input directory: %v", err)
+			}
+			projectDir = filepath.Dir(inputAbsPath)
+		} else {
+			// Fallback to current working directory
+			projectDir, err = os.Getwd()
+			if err != nil {
+				log.Fatalf("Cannot get current working directory: %v", err)
+			}
+		}
+		
 		cfg.InputDir = ""  // Reset so we can override from config
 		cfg.OutputDir = "" // Reset so we can override from config
+	} else {
+		// Project directory is the current working directory
+		projectDir, err = os.Getwd()
+		if err != nil {
+			log.Fatalf("Cannot get current working directory: %v", err)
+		}
 	}
 	
 	absProjectDir, err := filepath.Abs(projectDir)
@@ -144,12 +190,53 @@ func main() {
 	
 	cfg = fileCfg
 	
+	// Set legacy mode flag
+	cfg.LegacyMode = isLegacyMode
+	
 	// If serve is enabled, automatically enable watch mode
 	if cfg.Serve {
 		cfg.Watch = true
 	}
 	
 	printBanner()
+	
+	// In project selection mode (non-legacy with serve), skip project validation and building
+	if !isLegacyMode && cfg.Serve {
+		// Try to load config from current working directory if it has a sniplicity.yaml file
+		wd, err := os.Getwd()
+		if err == nil {
+			configPath := filepath.Join(wd, "sniplicity.yaml")
+			if _, err := os.Stat(configPath); err == nil {
+				// Config file exists in working directory, load it
+				if workingDirCfg, err := config.LoadConfigFromFile(wd); err == nil {
+					// If config was successfully loaded from working directory, use it
+					// but preserve the serve flag and other command-line overrides
+					workingDirCfg.Serve = cfg.Serve
+					if cfg.Port != 3000 {
+						workingDirCfg.Port = cfg.Port
+					}
+					if cfg.Verbose {
+						workingDirCfg.Verbose = cfg.Verbose
+					}
+					cfg = workingDirCfg
+				}
+			}
+		}
+		
+		// Start directly in web server mode for project selection
+		var b *builder.Builder
+		if explicitServeFlag {
+			// Use clipboard-only mode when -s flag was explicitly provided
+			b = builder.NewWithClipboardOnly(cfg)
+		} else {
+			// Use normal mode (with browser opening) when no args provided
+			b = builder.New(cfg)
+		}
+		if err := b.StartProjectSelectionMode(); err != nil {
+			log.Fatalf("Failed to start project selection mode: %v", err)
+		}
+		return
+	}
 	
 	// Check if input directory exists
 	absInputDir := cfg.GetAbsoluteInputDir()
@@ -163,18 +250,14 @@ func main() {
 		log.Fatalf("Cannot create output directory: %v", err)
 	}
 	
-	// Check if input directory exists
-	if _, err := os.Stat(cfg.InputDir); os.IsNotExist(err) {
-		log.Fatalf("Source directory %s does not exist", cfg.InputDir)
-	}
-	
-	// Create output directory if it doesn't exist
-	if err := os.MkdirAll(cfg.OutputDir, 0755); err != nil {
-		log.Fatalf("Cannot create output directory: %v", err)
-	}
-	
 	// Initialize and run the builder
-	b := builder.New(cfg)
+	var b *builder.Builder
+	if cfg.Serve && explicitServeFlag {
+		// Use clipboard-only mode when -s flag was explicitly provided
+		b = builder.NewWithClipboardOnly(cfg)
+	} else {
+		b = builder.New(cfg)
+	}
 	if err := b.Build(); err != nil {
 		log.Fatalf("Build failed: %v", err)
 	}

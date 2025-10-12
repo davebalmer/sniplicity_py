@@ -19,80 +19,67 @@
 
         <article>
             <header>
-                <h3>Current Configuration</h3>
+                <h3>Project Directory</h3>
             </header>
-            
-            <table>
-                <tbody>
-                    <tr>
-                        <td><strong>Input Directory</strong></td>
-                        <td><code id="current-input">Loading...</code></td>
-                    </tr>
-                    <tr>
-                        <td><strong>Output Directory</strong></td>
-                        <td><code id="current-output">Loading...</code></td>
-                    </tr>
-                    <tr>
-                        <td><strong>Server Port</strong></td>
-                        <td><code id="current-port">Loading...</code></td>
-                    </tr>
-                    <tr>
-                        <td><strong>Status</strong></td>
-                        <td><code id="current-status">Loading...</code></td>
-                    </tr>
-                </tbody>
-            </table>
+            <small id="project-directory">Loading...</small>
         </article>
         
-        <form id="config-form">
-            <fieldset>
-                <legend><strong>Configuration Settings</strong></legend>
-                
-                <label for="input-dir">
-                    Input Directory
-                    <input type="text" id="input-dir" name="input-dir" readonly>
-                    <small>This is determined by where sniplicity was launched</small>
-                </label>
-                
-                <label for="output-dir">
-                    Output Directory
-                    <input type="text" id="output-dir" name="output-dir" placeholder="build">
-                    <small>Relative to input directory or absolute path</small>
-                </label>
-                
-                <label for="port">
-                    Server Port
-                    <input type="number" id="port" name="port" min="1024" max="65535" value="3000">
-                </label>
-                
+        <article>
+            <header><h3>Configuration Settings</h3></header>
+            <form id="config-form">
                 <fieldset>
-                    <legend><strong>Options</strong></legend>
-                    <label for="watch">
-                        <input type="checkbox" id="watch" name="watch" role="switch">
-                        Watch for file changes
+                    <label for="project-name">
+                        Project Name (optional)
+                        <input type="text" id="project-name" name="project-name" placeholder="My Website Project">
+                        <small>Friendly name to help identify this project</small>
                     </label>
-                    <label for="serve">
-                        <input type="checkbox" id="serve" name="serve" role="switch">
-                        Enable web server
+                    
+                    <label for="input-dir">
+                        Input Directory
+                        <input type="text" id="input-dir" name="input-dir" readonly>
+                        <small>This is determined by where sniplicity was launched</small>
                     </label>
-                    <label for="verbose">
-                        <input type="checkbox" id="verbose" name="verbose" role="switch">
-                        Verbose logging
+                    
+                    <label for="output-dir">
+                        Output Directory
+                        <input type="text" id="output-dir" name="output-dir" placeholder="build">
+                        <small>Relative to input directory or absolute path</small>
                     </label>
-                    <label for="imgsize">
-                        <input type="checkbox" id="imgsize" name="imgsize" role="switch">
-                        Auto-add width/height to images
+                    
+                    <label for="port">
+                        Server Port
+                        <input type="number" id="port" name="port" min="1024" max="65535" value="3000">
                     </label>
+                    
+                    <fieldset>
+                        <legend><strong>Options</strong></legend>
+                        <label for="watch">
+                            <input type="checkbox" id="watch" name="watch" role="switch">
+                            Watch for file changes
+                        </label>
+                        <label for="serve">
+                            <input type="checkbox" id="serve" name="serve" role="switch">
+                            Enable web server
+                        </label>
+                        <label for="verbose">
+                            <input type="checkbox" id="verbose" name="verbose" role="switch">
+                            Verbose logging
+                        </label>
+                        <label for="imgsize">
+                            <input type="checkbox" id="imgsize" name="imgsize" role="switch">
+                            Auto-add width/height to images
+                        </label>
+                    </fieldset>
                 </fieldset>
-            </fieldset>
-            
-            <div class="grid">
-                <button type="button" class="secondary" onclick="loadConfig()">Reset</button>
-                <button type="submit">Save & Apply</button>
-            </div>
-        </form>
+                
+                <div class="grid">
+                    <button type="button" class="secondary" onclick="loadConfig()">Reset</button>
+                    <button type="submit">Save & Apply</button>
+                </div>
+            </form>
         
-        <div id="status" role="alert" style="display: none;"></div>
+            <div id="status" role="alert"></div>
+        </article>
     </main>
 
     <script>
@@ -104,15 +91,11 @@
                 const response = await fetch('/sniplicity/api/config');
                 currentConfig = await response.json();
                 
-                // Update current config display
-                document.getElementById('current-input').textContent = currentConfig.input_dir || 'N/A';
-                document.getElementById('current-output').textContent = currentConfig.output_dir || 'N/A';
-                document.getElementById('current-port').textContent = currentConfig.port || 'N/A';
-                document.getElementById('current-status').textContent = 
-                    currentConfig.serve ? 'Serving & Watching' : 
-                    currentConfig.watch ? 'Watching' : 'Static Build';
+                // Update project directory display
+                document.getElementById('project-directory').textContent = currentConfig.project_dir || 'Not specified';
                 
                 // Update form fields
+                document.getElementById('project-name').value = currentConfig.name || '';
                 document.getElementById('input-dir').value = currentConfig.input_dir || '';
                 document.getElementById('output-dir').value = currentConfig.output_dir || 'build';
                 document.getElementById('port').value = currentConfig.port || 3000;
@@ -148,7 +131,7 @@
                             window.location.href = `http://127.0.0.1:${formData.port}/sniplicity`;
                         }, 2000);
                     } else {
-                        // Reload config to show updated status
+                        // Reload config to show updated values
                         setTimeout(loadConfig, 1000);
                     }
                 } else {
@@ -159,26 +142,12 @@
             }
         }
         
-        // Show status message using Pico's styling
+        // Show status message
         function showStatus(message, type) {
             const status = document.getElementById('status');
             status.textContent = message;
+            status.className = type === 'success' ? 'status-success' : 'status-error';
             status.style.display = 'block';
-            
-            // Use Pico's article styling for status messages
-            if (type === 'success') {
-                status.style.backgroundColor = 'var(--pico-ins-color)';
-                status.style.color = 'white';
-                status.style.padding = '1rem';
-                status.style.borderRadius = 'var(--pico-border-radius)';
-                status.style.marginTop = '1rem';
-            } else {
-                status.style.backgroundColor = 'var(--pico-del-color)';
-                status.style.color = 'white';
-                status.style.padding = '1rem';
-                status.style.borderRadius = 'var(--pico-border-radius)';
-                status.style.marginTop = '1rem';
-            }
             
             if (type === 'success') {
                 setTimeout(() => {
@@ -192,6 +161,7 @@
             e.preventDefault();
             
             const formData = {
+                name: document.getElementById('project-name').value,
                 input_dir: document.getElementById('input-dir').value,
                 output_dir: document.getElementById('output-dir').value,
                 port: parseInt(document.getElementById('port').value),
