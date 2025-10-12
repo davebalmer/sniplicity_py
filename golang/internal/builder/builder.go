@@ -3,6 +3,7 @@ package builder
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"sniplicity/internal/processor"
 	"sniplicity/internal/types"
 	"sniplicity/internal/watcher"
+	"sniplicity/internal/web"
 
 	"github.com/fatih/color"
 )
@@ -47,12 +49,12 @@ func (b *Builder) Build() error {
 		green := color.New(color.FgGreen, color.Bold)
 		cyan := color.New(color.FgCyan)
 		fmt.Printf("%s%s is watching files in %s and serving at http://127.0.0.1:%d\n\n", 
-			green.Sprint("snip"), cyan.Sprint("licity"), cyan.Sprint(b.config.InputDir), b.config.Port)
+			green.Sprint("snip"), cyan.Sprint("licity"), cyan.Sprint(b.config.GetAbsoluteInputDir()), b.config.Port)
 	} else if b.config.Watch {
 		green := color.New(color.FgGreen, color.Bold)
 		cyan := color.New(color.FgCyan)
 		fmt.Printf("%s%s is watching files in %s\n\n", 
-			green.Sprint("snip"), cyan.Sprint("licity"), cyan.Sprint(b.config.InputDir))
+			green.Sprint("snip"), cyan.Sprint("licity"), cyan.Sprint(b.config.GetAbsoluteInputDir()))
 	}
 
 	if err := b.doBuild(); err != nil {
@@ -81,12 +83,12 @@ func (b *Builder) doBuild() error {
 	b.globals = make(map[string]string)
 
 	// Create output directory
-	if err := os.MkdirAll(b.config.OutputDir, 0755); err != nil {
+	if err := os.MkdirAll(b.config.GetAbsoluteOutputDir(), 0755); err != nil {
 		return fmt.Errorf("cannot create output directory: %w", err)
 	}
 
 	// Get file list - this matches Python version's get_file_list exactly
-	fileList, err := b.getFileList(b.config.InputDir)
+	fileList, err := b.getFileList(b.config.GetAbsoluteInputDir())
 	if err != nil {
 		return fmt.Errorf("cannot get file list: %w", err)
 	}
@@ -100,7 +102,7 @@ func (b *Builder) doBuild() error {
 	tempFiles := make([]*types.FileInfo, 0)
 	for _, item := range fileList {
 		relPath, filename, isMarkdownStr := item[0], item[1], item[2]
-		inputPath := filepath.Join(b.config.InputDir, relPath, filename)
+		inputPath := filepath.Join(b.config.GetAbsoluteInputDir(), relPath, filename)
 		
 		isMarkdown := isMarkdownStr == "true"
 		// Create FileInfo but DON'T process markdown yet in pre-loading phase
@@ -130,7 +132,7 @@ func (b *Builder) doBuild() error {
 	b.files = make([]*types.FileInfo, 0)
 	for _, item := range fileList {
 		relPath, filename, isMarkdownStr := item[0], item[1], item[2]
-		inputPath := filepath.Join(b.config.InputDir, relPath, filename)
+		inputPath := filepath.Join(b.config.GetAbsoluteInputDir(), relPath, filename)
 		
 		isMarkdown := isMarkdownStr == "true"
 		fileInfo := types.NewFileInfo(inputPath, filename, isMarkdown)
@@ -167,11 +169,16 @@ func (b *Builder) doBuild() error {
 		return fmt.Errorf("error processing variables: %w", err)
 	}
 
+	// 5. Copy assets (non-processed files) - AFTER all processing is complete
+	if err := b.copyAssets(); err != nil {
+		return fmt.Errorf("error copying assets: %w", err)
+	}
+
 	// Success message
 	green := color.New(color.FgGreen, color.Bold)
 	cyan := color.New(color.FgCyan)
 	fmt.Printf("%s from %s to %s\n", 
-		green.Sprint("Compiled"), cyan.Sprint(b.config.InputDir), cyan.Sprint(b.config.OutputDir))
+		green.Sprint("Compiled"), cyan.Sprint(b.config.GetAbsoluteInputDir()), cyan.Sprint(b.config.GetAbsoluteOutputDir()))
 	
 	if !b.config.Watch {
 		fmt.Printf("%s\n", green.Sprint("Success!"))
@@ -208,7 +215,7 @@ func (b *Builder) getFileList(sourceDir string) ([][3]string, error) {
 		// Check if it's a markdown file
 		if ext == ".md" || ext == ".mdown" || ext == ".markdown" {
 			fileList = append(fileList, [3]string{relPath, filename, "true"})
-		} else if ext == ".html" || ext == ".htm" || ext == ".txt" {
+		} else if ext == ".html" || ext == ".htm" {
 			fileList = append(fileList, [3]string{relPath, filename, "false"})
 		}
 
@@ -254,7 +261,7 @@ func (b *Builder) processIncludes() error {
 	}
 
 	for _, fileInfo := range b.files {
-		err := b.processor.ProcessIncludes(fileInfo, b.config.InputDir)
+		err := b.processor.ProcessIncludes(fileInfo, b.config.GetAbsoluteInputDir())
 		if err != nil {
 			return err
 		}
@@ -268,7 +275,7 @@ func (b *Builder) processIndexCommands() error {
 	}
 
 	for _, fileInfo := range b.files {
-		err := b.processor.ProcessIndexCommands(fileInfo, b.config.InputDir, b.templates, b.snippets, b.globals)
+		err := b.processor.ProcessIndexCommands(fileInfo, b.config.GetAbsoluteInputDir(), b.templates, b.snippets, b.globals)
 		if err != nil {
 			return err
 		}
@@ -297,7 +304,7 @@ func (b *Builder) processVariables() error {
 	}
 
 	for _, fileInfo := range b.files {
-		err := b.processor.ProcessVariables(fileInfo, b.config.OutputDir, b.templates, b.snippets, b.globals, b.config.Verbose)
+		err := b.processor.ProcessVariables(fileInfo, b.config.GetAbsoluteOutputDir(), b.templates, b.snippets, b.globals, b.config.Verbose)
 		if err != nil {
 			return err
 		}
@@ -306,7 +313,7 @@ func (b *Builder) processVariables() error {
 }
 
 func (b *Builder) watchFiles() error {
-	w, err := watcher.New(b.config.InputDir, func() {
+	w, err := watcher.New(b.config.GetAbsoluteInputDir(), func() {
 		if err := b.doBuild(); err != nil {
 			log.Printf("Build error: %v", err)
 		}
@@ -323,7 +330,7 @@ func (b *Builder) watchFiles() error {
 // hostAndWatch starts both file watching and web server with graceful shutdown
 func (b *Builder) hostAndWatch() error {
 	// Create file watcher
-	w, err := watcher.New(b.config.InputDir, func() {
+	w, err := watcher.New(b.config.GetAbsoluteInputDir(), func() {
 		if err := b.doBuild(); err != nil {
 			log.Printf("Build error: %v", err)
 		}
@@ -334,17 +341,68 @@ func (b *Builder) hostAndWatch() error {
 	defer w.Close()
 
 	// Create custom handler that properly handles absolute paths for local navigation
-	fileServer := http.FileServer(http.Dir(b.config.OutputDir))
+	fileServer := http.FileServer(http.Dir(b.config.GetAbsoluteOutputDir()))
+	
+	// Create web interface handler
+	webHandler := web.NewHandler(&b.config, func(newConfig *config.Config) error {
+		// This callback is called when configuration is saved via web interface
+		// Update the config and trigger a rebuild
+		b.config = *newConfig
+		
+		// Rebuild with the new configuration
+		if err := b.doBuild(); err != nil {
+			return fmt.Errorf("rebuild failed: %w", err)
+		}
+		
+		return nil
+	})
+	
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Handle sniplicity configuration interface
+		if strings.HasPrefix(r.URL.Path, "/sniplicity") {
+			webHandler.ServeHTTP(w, r)
+			return
+		}
+		
 		// Handle root path by serving index.html directly
 		if r.URL.Path == "/" {
 			// Serve index.html file directly without redirect
-			indexPath := filepath.Join(b.config.OutputDir, "index.html")
+			indexPath := filepath.Join(b.config.GetAbsoluteOutputDir(), "index.html")
 			http.ServeFile(w, r, indexPath)
 			return
 		}
 		
-		// For all other requests, use the file server normally
+		// Custom handling for file vs directory conflicts
+		// Always check if the requested path corresponds to an actual file first
+		requestedPath := strings.TrimPrefix(r.URL.Path, "/")
+		filePath := filepath.Join(b.config.GetAbsoluteOutputDir(), requestedPath)
+		
+		// Security: clean the path to prevent directory traversal
+		filePath = filepath.Clean(filePath)
+		outputDir := b.config.GetAbsoluteOutputDir()
+		if !strings.HasPrefix(filePath, outputDir) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+		
+		if b.config.Verbose {
+			fmt.Printf("DEBUG: Requested path: %s -> File path: %s\n", r.URL.Path, filePath)
+		}
+		
+		// Check if the exact file exists
+		if info, err := os.Stat(filePath); err == nil && !info.IsDir() {
+			// File exists and is not a directory, serve it directly
+			if b.config.Verbose {
+				fmt.Printf("DEBUG: Serving file directly: %s\n", filePath)
+			}
+			http.ServeFile(w, r, filePath)
+			return
+		}
+		
+		// If no file found, let the default file server handle it (for directories, etc.)
+		if b.config.Verbose {
+			fmt.Printf("DEBUG: Using default file server for: %s\n", r.URL.Path)
+		}
 		fileServer.ServeHTTP(w, r)
 	})
 
@@ -385,4 +443,89 @@ func (b *Builder) hostAndWatch() error {
 	
 	fmt.Printf("%s\n", green.Sprint("Done!"))
 	return nil
+}
+
+// copyAssets copies all non-processed files (CSS, JS, images, etc.) from input to output directory
+func (b *Builder) copyAssets() error {
+	inputDir := b.config.GetAbsoluteInputDir()
+	outputDir := b.config.GetAbsoluteOutputDir()
+	
+	if b.config.Verbose {
+		green := color.New(color.FgGreen)
+		fmt.Printf("Copying %s...\n", green.Sprint("assets"))
+	}
+	
+	return filepath.Walk(inputDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if info.IsDir() {
+			return nil
+		}
+
+		// Get relative path from input directory
+		relPath, err := filepath.Rel(inputDir, path)
+		if err != nil {
+			return err
+		}
+
+		// Check if this file should be processed (not copied)
+		ext := strings.ToLower(filepath.Ext(path))
+		isProcessedFile := ext == ".md" || ext == ".mdown" || ext == ".markdown" || 
+		                   ext == ".html" || ext == ".htm"
+		
+		if isProcessedFile {
+			// Skip files that are processed by sniplicity
+			return nil
+		}
+
+		// Copy the asset file
+		outputPath := filepath.Join(outputDir, relPath)
+		
+		// Create directory if it doesn't exist
+		if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+			return fmt.Errorf("creating directory %s: %w", filepath.Dir(outputPath), err)
+		}
+
+		// Copy the file
+		if err := b.copyFile(path, outputPath); err != nil {
+			return fmt.Errorf("copying %s to %s: %w", path, outputPath, err)
+		}
+
+		if b.config.Verbose {
+			cyan := color.New(color.FgCyan)
+			fmt.Printf("  Copied %s\n", cyan.Sprint(relPath))
+		}
+
+		return nil
+	})
+}
+
+// copyFile copies a single file from src to dst
+func (b *Builder) copyFile(src, dst string) error {
+	sourceFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+
+	destFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+
+	_, err = io.Copy(destFile, sourceFile)
+	if err != nil {
+		return err
+	}
+
+	// Copy file permissions
+	sourceInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+
+	return os.Chmod(dst, sourceInfo.Mode())
 }

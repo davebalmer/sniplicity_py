@@ -1,0 +1,32 @@
+/* Custom Sniplicity Styles
+ * 
+ * This file loads after Pico CSS and can be used to customize the settings interface.
+ * Add your custom styles here to override Pico's defaults.
+ * 
+ * Examples:
+ * 
+ * Custom colors:
+ * :root {
+ *   --pico-primary: #your-color;
+ * }
+ * 
+ * Custom spacing:
+ * .container {
+ *   max-width: 800px;
+ * }
+ * 
+ * Custom form styling:
+ * input[type="text"] {
+ *   border-radius: 8px;
+ * }
+ */
+
+/* Add your custom styles below this line */
+
+/* Example customization - subtle enhancement to the header */
+header hgroup h1 {
+    background: linear-gradient(135deg, var(--pico-primary) 0%, var(--pico-secondary) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}

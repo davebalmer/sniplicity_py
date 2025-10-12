@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"sniplicity/internal/builder"
 	"sniplicity/internal/config"
@@ -61,6 +62,70 @@ func main() {
 		return
 	}
 	
+	// Determine project directory and handle backward compatibility
+	var explicitInputDir, explicitOutputDir string
+	
+	// Project directory is always the current working directory
+	projectDir, err := os.Getwd()
+	if err != nil {
+		log.Fatalf("Cannot get current working directory: %v", err)
+	}
+	
+	if cfg.InputDir != "" || cfg.OutputDir != "" {
+		// Legacy mode: explicit -i and/or -o flags provided
+		explicitInputDir = cfg.InputDir
+		explicitOutputDir = cfg.OutputDir
+		cfg.InputDir = ""  // Reset so we can override from config
+		cfg.OutputDir = "" // Reset so we can override from config
+	}
+	
+	absProjectDir, err := filepath.Abs(projectDir)
+	if err != nil {
+		log.Fatalf("Cannot get absolute project directory: %v", err)
+	}
+	
+	// Load configuration from file (if exists)
+	fileCfg, err := config.LoadConfigFromFile(absProjectDir)
+	if err != nil {
+		log.Fatalf("Error loading config: %v", err)
+	}
+	
+	// Command line flags override config file values
+	if explicitInputDir != "" {
+		// Legacy mode: -i flag overrides everything (absolute path)
+		fileCfg.InputDir = explicitInputDir
+		// Make it relative to project dir if possible, otherwise keep absolute
+		if rel, err := filepath.Rel(absProjectDir, explicitInputDir); err == nil && !strings.HasPrefix(rel, "..") {
+			fileCfg.InputDir = rel
+		} else {
+			fileCfg.InputDir = explicitInputDir // Keep absolute
+		}
+	}
+	if explicitOutputDir != "" {
+		// Legacy mode: -o flag overrides everything (absolute path)
+		fileCfg.OutputDir = explicitOutputDir
+		// Make it relative to project dir if possible, otherwise keep absolute
+		if rel, err := filepath.Rel(absProjectDir, explicitOutputDir); err == nil && !strings.HasPrefix(rel, "..") {
+			fileCfg.OutputDir = rel
+		} else {
+			fileCfg.OutputDir = explicitOutputDir // Keep absolute
+		}
+	}
+	if cfg.Watch {
+		fileCfg.Watch = cfg.Watch
+	}
+	if cfg.Verbose {
+		fileCfg.Verbose = cfg.Verbose
+	}
+	if cfg.Serve {
+		fileCfg.Serve = cfg.Serve
+	}
+	if cfg.Port != 3000 { // Only override if explicitly set
+		fileCfg.Port = cfg.Port
+	}
+	
+	cfg = fileCfg
+	
 	// If serve is enabled, automatically enable watch mode
 	if cfg.Serve {
 		cfg.Watch = true
@@ -68,27 +133,17 @@ func main() {
 	
 	printBanner()
 	
-	if cfg.OutputDir == "" {
-		flag.Usage()
-		os.Exit(1)
+	// Check if input directory exists
+	absInputDir := cfg.GetAbsoluteInputDir()
+	if _, err := os.Stat(absInputDir); os.IsNotExist(err) {
+		log.Fatalf("Input directory %s does not exist", absInputDir)
 	}
 	
-	// Convert to absolute paths
-	if cfg.InputDir != "" {
-		absInput, err := filepath.Abs(cfg.InputDir)
-		if err != nil {
-			log.Fatalf("Invalid input directory: %v", err)
-		}
-		cfg.InputDir = absInput
-	} else {
-		cfg.InputDir, _ = os.Getwd()
+	// Create output directory if it doesn't exist
+	absOutputDir := cfg.GetAbsoluteOutputDir()
+	if err := os.MkdirAll(absOutputDir, 0755); err != nil {
+		log.Fatalf("Cannot create output directory: %v", err)
 	}
-	
-	absOutput, err := filepath.Abs(cfg.OutputDir)
-	if err != nil {
-		log.Fatalf("Invalid output directory: %v", err)
-	}
-	cfg.OutputDir = absOutput
 	
 	// Check if input directory exists
 	if _, err := os.Stat(cfg.InputDir); os.IsNotExist(err) {
