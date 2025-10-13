@@ -16,6 +16,9 @@
                 <p>Select a Project</p>
             </hgroup>
         </header>
+        
+        <!-- Status Message -->
+        <div id="status" role="alert" style="display: none;"></div>
 
         <!-- Open a Project Section (moved to top) -->
         <article>
@@ -41,13 +44,39 @@
                 <p>Loading recent projects...</p>
             </div>
         </article>
-        
-        <div id="status" role="alert" style="display: none;"></div>
+
+        <!-- Network Access Information -->
+        <div id="network-info" style="display: none;">
+            <small>
+                Test from other local devices at: 
+                <a id="network-url" href="#" target="_blank">Loading...</a>
+            </small>
+        </div>
     </main>
 
     <script>
         let currentProject = null;
         let recentProjects = [];
+        
+        // Load network information
+        async function loadNetworkInfo() {
+            try {
+                const response = await fetch('/sniplicity/api/network');
+                const data = await response.json();
+                
+                if (data.network_url) {
+                    const networkInfoDiv = document.getElementById('network-info');
+                    const networkUrlLink = document.getElementById('network-url');
+                    
+                    networkUrlLink.href = data.network_url;
+                    networkUrlLink.textContent = data.network_url;
+                    networkInfoDiv.style.display = 'block';
+                }
+            } catch (error) {
+                console.log('Could not load network info:', error);
+                // Network info is optional, so we don't show an error to the user
+            }
+        }
         
         // Load project data
         async function loadProjects() {
@@ -69,6 +98,12 @@
             }
         }
         
+        // Add word break opportunities to paths for better wrapping
+        function addPathBreaks(path) {
+            // Add <wbr> tags after path separators to allow breaking
+            return escapeHtml(path).replace(/([\/\\])/g, '$1<wbr>');
+        }
+
         // Update the UI with project data
         function updateUI() {
             // Update recent projects list (including current project at top)
@@ -77,8 +112,11 @@
             // Combine current and recent projects, with current at top
             let allProjects = [];
             if (currentProject && currentProject.path) {
+                // Find the current project in recent projects to get its last_used date
+                const recentEntry = recentProjects.find(p => p.path === currentProject.path);
                 allProjects.push({
                     ...currentProject,
+                    last_used: recentEntry ? recentEntry.last_used : currentProject.last_used,
                     is_current: true
                 });
             }
@@ -101,15 +139,17 @@
             let html = '';
             allProjects.forEach(project => {
                 const displayName = project.display_name || project.path.split('/').pop() || project.path;
-                const lastUsed = project.last_used ? new Date(project.last_used).toLocaleDateString() : 'Current';
+                const lastUsed = project.last_used ? new Date(project.last_used).toLocaleDateString() : (project.is_current ? '' : 'N/A');
                 const currentBadge = project.is_current ? '<span class="current-badge">Current</span>' : '';
+                const currentClass = project.is_current ? ' current-project-item' : '';
                 
                 html += `
-                    <div class="grid">
+                    <div class="grid${currentClass}">
                         <div>
-                            <strong>${escapeHtml(displayName)}${currentBadge}</strong><br>
-                            <small>${escapeHtml(project.path)}</small><br>
-                            <small>Last used: ${lastUsed}</small>
+                            <strong>${escapeHtml(displayName)}${currentBadge}</strong>
+                            <small>${lastUsed}</small>
+                            <br>
+                            <small>${addPathBreaks(project.path)}</small>
                         </div>
                         <div>
                             <button type="button" onclick="selectProject('${project.path}')" data-tooltip="Switch to this project">Open</button>
@@ -324,8 +364,11 @@
             }
         }
         
-        // Load projects on page load
-        document.addEventListener('DOMContentLoaded', loadProjects);
+        // Load projects and network info on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadProjects();
+            loadNetworkInfo();
+        });
     </script>
 </body>
 </html>

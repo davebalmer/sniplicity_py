@@ -1,3 +1,0 @@
-<!-- if canonical -->
-<link rel="canonical" href="test">
-<!-- endif -->

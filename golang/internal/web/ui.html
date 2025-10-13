@@ -127,8 +127,10 @@
                     
                     // If port changed, redirect to new port after a delay
                     if (formData.port !== currentConfig.port) {
+                        // Detect current protocol and use it for redirect
+                        const currentProtocol = window.location.protocol;
                         setTimeout(() => {
-                            window.location.href = `http://127.0.0.1:${formData.port}/sniplicity`;
+                            window.location.href = `${currentProtocol}//127.0.0.1:${formData.port}/sniplicity`;
                         }, 2000);
                     } else {
                         // Reload config to show updated values

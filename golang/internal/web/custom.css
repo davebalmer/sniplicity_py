@@ -32,8 +32,8 @@ header hgroup h1 {
 
 /* Project selector styling */
 #recent-projects-list .grid {
-    margin-bottom: 1rem;
-    padding-bottom: 1rem;
+    margin: 0;
+    padding: 1rem;
     border-bottom: 1px solid var(--pico-muted-border-color);
 }
 
@@ -46,17 +46,23 @@ header hgroup h1 {
 small {
     font-size: 0.875rem;
     color: var(--pico-muted-color);
+    /* word-break: break-all; */
+    /* overflow-wrap: break-word; */
 }
 
 /* Project item buttons container */
 #recent-projects-list .grid > div:last-child {
-    text-align: right;
-    white-space: nowrap;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 0.5rem;
 }
 
-/* Project item buttons spacing */
-#recent-projects-list .grid button:not(:last-child) {
-    margin-right: 0.5rem;
+/* On larger screens, center the buttons vertically within the grid */
+@media (min-width: 768px) {
+    #recent-projects-list .grid {
+        align-items: center;
+    }
 }
 
 /* Current project badge */
@@ -67,6 +73,11 @@ small {
     border-radius: 0.25rem;
     font-size: 0.75rem;
     margin-left: 0.5rem;
+}
+
+/* Current project item highlighting */
+.current-project-item {
+    background: var(--pico-primary-focus);
 }
 
 /* Status messages */

@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -61,6 +62,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveCSS(w, r)
 	case path == "/custom.css":
 		h.serveCustomCSS(w, r)
+	case path == "/api/network" && r.Method == "GET":
+		h.getNetworkInfo(w, r)
 	case path == "/api/config" && r.Method == "GET":
 		h.getConfig(w, r)
 	case path == "/api/config" && r.Method == "POST":
@@ -108,6 +111,65 @@ func (h *Handler) serveCustomCSS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=31536000") // Cache for 1 year
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(customCSS))
+}
+
+// getLocalIP returns the local IP address of the machine
+func getLocalIP() string {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		// Fallback to finding local IP through network interfaces
+		addrs, err := net.InterfaceAddrs()
+		if err != nil {
+			return ""
+		}
+		for _, addr := range addrs {
+			if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+				if ipnet.IP.To4() != nil {
+					return ipnet.IP.String()
+				}
+			}
+		}
+		return ""
+	}
+	defer conn.Close()
+	
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	return localAddr.IP.String()
+}
+
+// NetworkInfoResponse represents the network information sent to the client
+type NetworkInfoResponse struct {
+	LocalhostURL string `json:"localhost_url"`
+	NetworkURL   string `json:"network_url"`
+	LocalIP      string `json:"local_ip"`
+	Port         int    `json:"port"`
+}
+
+// getNetworkInfo returns network access information
+func (h *Handler) getNetworkInfo(w http.ResponseWriter, r *http.Request) {
+	localIP := getLocalIP()
+	port := h.config.Port
+	
+	// Default to HTTP for local development
+	protocol := "http"
+	// Only use HTTPS if explicitly detected from request
+	if r.TLS != nil {
+		protocol = "https"
+	}
+	
+	response := NetworkInfoResponse{
+		LocalhostURL: fmt.Sprintf("%s://127.0.0.1:%d", protocol, port),
+		NetworkURL:   "",
+		LocalIP:      localIP,
+		Port:         port,
+	}
+	
+	if localIP != "" {
+		response.NetworkURL = fmt.Sprintf("%s://%s:%d", protocol, localIP, port)
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 // ConfigResponse represents the configuration data sent to the client
@@ -232,27 +294,25 @@ func (h *Handler) getProjects(w http.ResponseWriter, r *http.Request) {
 	
 	// Check if we have a valid project directory with config
 	if h.config.ProjectDir != "" {
-		// Check if there's actually a config file in the project directory
-		configPath := filepath.Join(h.config.ProjectDir, "sniplicity.yaml")
-		if _, err := os.Stat(configPath); err == nil {
-			// Config file exists - show as current project if it exists in recent projects
-			isInRecentProjects := h.recentProjects.ProjectExists(h.config.ProjectDir)
-			
-			// Show as current project if it's in recent projects OR if there are no recent projects
-			allRecentProjects := h.recentProjects.GetProjects()
-			if isInRecentProjects || len(allRecentProjects) == 0 {
-				displayName := h.config.Name
-				if displayName == "" {
-					displayName = "Current Project"
-				}
-				currentProject = &ProjectInfo{
-					Path:        h.config.ProjectDir,
-					DisplayName: displayName,
-				}
+		// Config file exists - show as current project if it exists in recent projects
+		isInRecentProjects := h.recentProjects.ProjectExists(h.config.ProjectDir)
+		
+		// Show as current project if it's in recent projects OR if there are no recent projects
+		allRecentProjects := h.recentProjects.GetProjects()
+		if isInRecentProjects || len(allRecentProjects) == 0 {
+			displayName := h.config.Name
+			if displayName == "" {
+				displayName = "Current Project"
 			}
-		} else {
-			// No config file found - suggest current directory in the input field
-			defaultProjectPath = h.config.ProjectDir
+			currentProject = &ProjectInfo{
+				Path:        h.config.ProjectDir,
+				DisplayName: displayName,
+			}
+		}
+	} else {
+		// No valid project - get current working directory for the input field
+		if wd, err := os.Getwd(); err == nil {
+			defaultProjectPath = wd
 		}
 	}
 	

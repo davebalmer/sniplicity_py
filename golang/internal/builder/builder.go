@@ -2,9 +2,17 @@ package builder
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log"
+	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -33,6 +41,98 @@ type Builder struct {
 	globals      map[string]string
 	processor    *processor.Processor
 	clipboardOnly bool // When true, copy URL to clipboard instead of opening browser
+}
+
+// getLocalIP returns the local IP address of the machine
+func getLocalIP() string {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		// Fallback to finding local IP through network interfaces
+		addrs, err := net.InterfaceAddrs()
+		if err != nil {
+			return ""
+		}
+		for _, addr := range addrs {
+			if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+				if ipnet.IP.To4() != nil {
+					return ipnet.IP.String()
+				}
+			}
+		}
+		return ""
+	}
+	defer conn.Close()
+	
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	return localAddr.IP.String()
+}
+
+// generateSelfSignedCert generates an in-memory self-signed certificate for HTTPS
+func generateSelfSignedCert() (tls.Certificate, error) {
+	// Generate a new RSA private key
+	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("generating private key: %w", err)
+	}
+
+	// Create certificate template
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			Organization:  []string{"Sniplicity Dev"},
+			Country:       []string{"US"},
+			Province:      []string{""},
+			Locality:      []string{"Local"},
+			StreetAddress: []string{""},
+			PostalCode:    []string{""},
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour), // Valid for 1 year
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  false,
+		IPAddresses:           []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
+		DNSNames:              []string{"localhost"},
+	}
+
+	// Add local IP to certificate if available
+	if localIP := getLocalIP(); localIP != "" {
+		if ip := net.ParseIP(localIP); ip != nil {
+			template.IPAddresses = append(template.IPAddresses, ip)
+		}
+	}
+
+	// Generate subject key identifier
+	pubKeyBytes, err := x509.MarshalPKIXPublicKey(&privKey.PublicKey)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("marshaling public key: %w", err)
+	}
+	template.SubjectKeyId = pubKeyBytes[:20] // Use first 20 bytes as key ID
+
+	// Create certificate
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &privKey.PublicKey, privKey)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("creating certificate: %w", err)
+	}
+
+	// Encode certificate
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+
+	// Encode private key
+	privKeyDER, err := x509.MarshalPKCS8PrivateKey(privKey)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("marshaling private key: %w", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privKeyDER})
+
+	// Create TLS certificate
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("creating X509 key pair: %w", err)
+	}
+
+	return cert, nil
 }
 
 // New creates a new Builder instance
@@ -64,8 +164,8 @@ func (b *Builder) Build() error {
 	if b.config.Serve {
 		green := color.New(color.FgGreen, color.Bold)
 		cyan := color.New(color.FgCyan)
-		fmt.Printf("%s%s is watching files in %s and serving at http://127.0.0.1:%d\n\n", 
-			green.Sprint("snip"), cyan.Sprint("licity"), cyan.Sprint(b.config.GetAbsoluteInputDir()), b.config.Port)
+		fmt.Printf("%s%s is watching files in %s and serving\n\n", 
+			green.Sprint("snip"), cyan.Sprint("licity"), cyan.Sprint(b.config.GetAbsoluteInputDir()))
 	} else if b.config.Watch {
 		green := color.New(color.FgGreen, color.Bold)
 		cyan := color.New(color.FgCyan)
@@ -91,8 +191,8 @@ func (b *Builder) Build() error {
 func (b *Builder) StartProjectSelectionMode() error {
 	green := color.New(color.FgGreen, color.Bold)
 	cyan := color.New(color.FgCyan)
-	fmt.Printf("%s%s project selector starting at http://127.0.0.1:%d\n\n", 
-		green.Sprint("snip"), cyan.Sprint("licity"), b.config.Port)
+	fmt.Printf("%s%s project selector starting\n\n", 
+		green.Sprint("snip"), cyan.Sprint("licity"))
 
 	return b.startWebServerOnly()
 }
@@ -465,16 +565,22 @@ func (b *Builder) hostAndWatch() error {
 
 	// Create HTTP server
 	server := &http.Server{
-		Addr:    fmt.Sprintf("127.0.0.1:%d", b.config.Port),
+		Addr:    fmt.Sprintf("0.0.0.0:%d", b.config.Port),
 		Handler: handler,
 	}
 
-	// Start server in goroutine
+	// Start server in goroutine - default to HTTP for better dev experience
 	go func() {
 		cyan := color.New(color.FgCyan)
-		serverURL := fmt.Sprintf("http://127.0.0.1:%d", b.config.Port)
 		
+		// Default to HTTP for local development
+		serverURL := fmt.Sprintf("http://127.0.0.1:%d", b.config.Port)
 		fmt.Printf("Starting web server at %s\n", cyan.Sprint(serverURL))
+		
+		if localIP := getLocalIP(); localIP != "" {
+			localURL := fmt.Sprintf("http://%s:%d", localIP, b.config.Port)
+			fmt.Printf("Network access available at %s\n", cyan.Sprint(localURL))
+		}
 		
 		// Try to copy URL to clipboard
 		if err := clipboard.WriteAll(serverURL); err == nil {
@@ -495,7 +601,7 @@ func (b *Builder) hostAndWatch() error {
 		fmt.Println()
 		
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("Server error: %v", err)
+			log.Printf("HTTP server error: %v", err)
 		}
 	}()
 	
@@ -631,19 +737,24 @@ func (b *Builder) startWebServerOnly() error {
 
 	// Create HTTP server
 	server := &http.Server{
-		Addr:    fmt.Sprintf("127.0.0.1:%d", b.config.Port),
+		Addr:    fmt.Sprintf("0.0.0.0:%d", b.config.Port),
 		Handler: handler,
 	}
 
-	// Start server in goroutine
+	// Start server in goroutine - default to HTTP for better dev experience
 	go func() {
 		cyan := color.New(color.FgCyan)
-		serverURL := fmt.Sprintf("http://127.0.0.1:%d", b.config.Port)
 		
-		// In project selection mode, direct users to the /sniplicity endpoint
+		// Default to HTTP for local development
+		serverURL := fmt.Sprintf("http://127.0.0.1:%d", b.config.Port)
 		projectSelectorURL := serverURL + "/sniplicity"
 		
 		fmt.Printf("Starting web server at %s\n", cyan.Sprint(serverURL))
+		
+		if localIP := getLocalIP(); localIP != "" {
+			localURL := fmt.Sprintf("http://%s:%d", localIP, b.config.Port)
+			fmt.Printf("Network access available at %s\n", cyan.Sprint(localURL))
+		}
 		
 		// Try to copy project selector URL to clipboard
 		if err := clipboard.WriteAll(projectSelectorURL); err == nil {
@@ -664,7 +775,7 @@ func (b *Builder) startWebServerOnly() error {
 		fmt.Println()
 		
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("Server error: %v", err)
+			log.Printf("HTTP server error: %v", err)
 		}
 	}()
 	

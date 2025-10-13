@@ -8,30 +8,30 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config holds all configuration options for sniplicity
+// Config represents the configuration for a sniplicity project
 type Config struct {
-	ProjectDir string `yaml:"-"`          // Project root directory (where sniplicity.yaml lives)
-	Name       string `yaml:"name"`       // Optional friendly name for the project
-	InputDir   string `yaml:"input_dir"`  // Input directory relative to project root (default: "snip")
-	OutputDir  string `yaml:"output_dir"` // Output directory relative to project root (default: "www")
-	Watch      bool   `yaml:"watch"`
-	Verbose    bool   `yaml:"verbose"`
-	Serve      bool   `yaml:"serve"`      // Enable web server and watch mode
-	Port       int    `yaml:"port"`       // Port for web server (default 3000)
-	ImgSize    bool   `yaml:"imgsize"`    // Automatically add width/height attributes to img tags (default: true)
-	LegacyMode bool   `yaml:"-"`          // True if explicit command line parameters were used (don't save to file)
+	Name       string   `yaml:"name"`       // Friendly name for the project
+	ProjectDir string   `yaml:"-"`          // Full path to the project directory (not saved to YAML)
+	InputDir   string   `yaml:"input_dir"`  // Relative path to input directory
+	OutputDir  string   `yaml:"output_dir"` // Relative path to output directory
+	Watch      bool     `yaml:"watch"`      // Whether to watch for file changes
+	Verbose    bool     `yaml:"verbose"`    // Whether to enable verbose logging
+	Serve      bool     `yaml:"serve"`      // Whether to serve files via HTTP
+	Port       int      `yaml:"port"`       // Port for HTTP server
+	ImgSize    bool     `yaml:"imgsize"`    // Whether to add width/height attributes to images
+	LegacyMode bool     `yaml:"-"`          // Whether running in legacy mode (not saved to YAML)
 }
 
-// ConfigFile represents the structure saved to sniplicity.yaml
+// ConfigFile represents the structure of the configuration file on disk
 type ConfigFile struct {
-	Name      string `yaml:"name"`
-	InputDir  string `yaml:"input_dir"`
-	OutputDir string `yaml:"output_dir"`
-	Watch     bool   `yaml:"watch"`
-	Verbose   bool   `yaml:"verbose"`  
-	Serve     bool   `yaml:"serve"`
-	Port      int    `yaml:"port"`
-	ImgSize   *bool  `yaml:"imgsize"` // Pointer to distinguish between unset and false
+	Name      string   `yaml:"name"`
+	InputDir  string   `yaml:"input_dir"`
+	OutputDir string   `yaml:"output_dir"`
+	Watch     bool     `yaml:"watch"`
+	Verbose   bool     `yaml:"verbose"`
+	Serve     bool     `yaml:"serve"`
+	Port      int      `yaml:"port"`
+	ImgSize   *bool    `yaml:"imgsize,omitempty"` // Pointer to handle optional field
 }
 
 // DefaultConfig returns a config with sensible defaults
@@ -67,12 +67,14 @@ func (c *Config) GetAbsoluteOutputDir() string {
 func LoadConfigFromFile(projectDir string) (Config, error) {
 	configPath := filepath.Join(projectDir, "sniplicity.yaml")
 	cfg := DefaultConfig()
-	cfg.ProjectDir = projectDir
 	
-	// If no config file exists, return defaults
+	// If no config file exists, return defaults without setting ProjectDir
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		return cfg, nil
 	}
+	
+	// Config file exists, so this is a valid project directory
+	cfg.ProjectDir = projectDir
 	
 	data, err := os.ReadFile(configPath)
 	if err != nil {
