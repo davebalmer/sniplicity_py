@@ -30,6 +30,7 @@ var customCSS string
 type Handler struct {
 	config         *config.Config
 	recentProjects *projects.RecentProjects
+	appDir         string                         // Directory where the app executable is located
 	onConfigSave   func(*config.Config) error     // Callback for when config is saved
 	onProjectSwitch func(string) error            // Callback for when project is switched
 }
@@ -41,9 +42,16 @@ func NewHandler(cfg *config.Config, onConfigSave func(*config.Config) error, onP
 		return nil, fmt.Errorf("initializing recent projects: %w", err)
 	}
 	
+	// Get the directory where the executable is located
+	var appDir string
+	if execPath, err := os.Executable(); err == nil {
+		appDir = filepath.Dir(execPath)
+	}
+	
 	return &Handler{
 		config:          cfg,
 		recentProjects:  rp,
+		appDir:          appDir,
 		onConfigSave:    onConfigSave,
 		onProjectSwitch: onProjectSwitch,
 	}, nil
@@ -312,7 +320,13 @@ func (h *Handler) getProjects(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// No valid project - get current working directory for the input field
 		if wd, err := os.Getwd(); err == nil {
-			defaultProjectPath = wd
+			// Don't suggest the app directory itself as a project directory
+			if wd != h.appDir {
+				// Also don't suggest the user's home directory
+				if homeDir, err := os.UserHomeDir(); err != nil || wd != homeDir {
+					defaultProjectPath = wd
+				}
+			}
 		}
 	}
 	
