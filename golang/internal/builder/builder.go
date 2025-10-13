@@ -34,13 +34,14 @@ import (
 
 // Builder handles the main build process
 type Builder struct {
-	config       config.Config
-	files        []*types.FileInfo
-	snippets     map[string][]string
-	templates    map[string][]string
-	globals      map[string]string
-	processor    *processor.Processor
+	config        config.Config
+	files         []*types.FileInfo
+	snippets      map[string][]string
+	templates     map[string][]string
+	globals       map[string]string
+	processor     *processor.Processor
 	clipboardOnly bool // When true, copy URL to clipboard instead of opening browser
+	watchManager  *watcher.Manager // Manages file watching
 }
 
 // getLocalIP returns the local IP address of the machine
@@ -137,7 +138,7 @@ func generateSelfSignedCert() (tls.Certificate, error) {
 
 // New creates a new Builder instance
 func New(cfg config.Config) *Builder {
-	return &Builder{
+	b := &Builder{
 		config:        cfg,
 		snippets:      make(map[string][]string),
 		templates:     make(map[string][]string),
@@ -145,11 +146,20 @@ func New(cfg config.Config) *Builder {
 		processor:     processor.New(cfg.Verbose),
 		clipboardOnly: false, // Default to opening browser
 	}
+	
+	// Initialize watch manager
+	b.watchManager = watcher.NewManager(func() {
+		if err := b.doBuild(); err != nil {
+			log.Printf("Build error: %v", err)
+		}
+	})
+	
+	return b
 }
 
 // NewWithClipboardOnly creates a new Builder instance that only copies URLs to clipboard
 func NewWithClipboardOnly(cfg config.Config) *Builder {
-	return &Builder{
+	b := &Builder{
 		config:        cfg,
 		snippets:      make(map[string][]string),
 		templates:     make(map[string][]string),
@@ -157,6 +167,15 @@ func NewWithClipboardOnly(cfg config.Config) *Builder {
 		processor:     processor.New(cfg.Verbose),
 		clipboardOnly: true, // Copy to clipboard instead of opening browser
 	}
+	
+	// Initialize watch manager
+	b.watchManager = watcher.NewManager(func() {
+		if err := b.doBuild(); err != nil {
+			log.Printf("Build error: %v", err)
+		}
+	})
+	
+	return b
 }
 
 // Build performs the main build process
@@ -440,15 +459,10 @@ func (b *Builder) processVariables() error {
 }
 
 func (b *Builder) watchFiles() error {
-	w, err := watcher.New(b.config.GetAbsoluteInputDir(), func() {
-		if err := b.doBuild(); err != nil {
-			log.Printf("Build error: %v", err)
-		}
-	})
-	if err != nil {
-		return fmt.Errorf("cannot create file watcher: %w", err)
+	if err := b.watchManager.Start(b.config.GetAbsoluteInputDir()); err != nil {
+		return fmt.Errorf("cannot start file watcher: %w", err)
 	}
-	defer w.Close()
+	defer b.watchManager.Stop()
 
 	// Block forever
 	select {}
@@ -456,16 +470,13 @@ func (b *Builder) watchFiles() error {
 
 // hostAndWatch starts both file watching and web server with graceful shutdown
 func (b *Builder) hostAndWatch() error {
-	// Create file watcher
-	w, err := watcher.New(b.config.GetAbsoluteInputDir(), func() {
-		if err := b.doBuild(); err != nil {
-			log.Printf("Build error: %v", err)
+	// Start file watcher if watch mode is enabled
+	if b.config.Watch {
+		if err := b.watchManager.Start(b.config.GetAbsoluteInputDir()); err != nil {
+			return fmt.Errorf("cannot start file watcher: %w", err)
 		}
-	})
-	if err != nil {
-		return fmt.Errorf("cannot create file watcher: %w", err)
+		defer b.watchManager.Stop()
 	}
-	defer w.Close()
 
 	// Create custom handler that properly handles absolute paths for local navigation
 	fileServer := http.FileServer(http.Dir(b.config.GetAbsoluteOutputDir()))
@@ -631,20 +642,12 @@ func (b *Builder) hostAndWatch() error {
 
 // startWebServerOnly starts just the web server for project selection, without file watching
 func (b *Builder) startWebServerOnly() error {
-	var w *watcher.Watcher
-	
-	// Create file watcher if we have a project
-	if b.config.ProjectDir != "" && b.config.InputDir != "" {
-		var err error
-		w, err = watcher.New(b.config.GetAbsoluteInputDir(), func() {
-			if err := b.doBuild(); err != nil {
-				log.Printf("Build error: %v", err)
-			}
-		})
-		if err != nil {
-			log.Printf("Warning: Cannot create file watcher: %v", err)
+	// Start file watcher if we have a project and watch mode is enabled
+	if b.config.ProjectDir != "" && b.config.InputDir != "" && b.config.Watch {
+		if err := b.watchManager.Start(b.config.GetAbsoluteInputDir()); err != nil {
+			log.Printf("Warning: Cannot start file watcher: %v", err)
 		} else {
-			defer w.Close()
+			defer b.watchManager.Stop()
 		}
 	}
 	// Create web interface handler
@@ -667,7 +670,18 @@ func (b *Builder) startWebServerOnly() error {
 			return fmt.Errorf("loading config from new project: %w", err)
 		}
 		
+		// Preserve watch mode and serve settings from the original config
+		newConfig.Watch = b.config.Watch
+		newConfig.Serve = b.config.Serve
+		
 		b.config = newConfig
+		
+		// Switch watcher to new project directory if watch mode is enabled
+		if b.config.Watch {
+			if err := b.watchManager.Switch(b.config.GetAbsoluteInputDir()); err != nil {
+				log.Printf("Warning: could not switch file watcher: %v", err)
+			}
+		}
 		
 		// Rebuild with the new project
 		if err := b.doBuild(); err != nil {
