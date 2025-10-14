@@ -19,6 +19,7 @@ type Config struct {
 	Serve      bool     `yaml:"serve"`      // Whether to serve files via HTTP
 	Port       int      `yaml:"port"`       // Port for HTTP server
 	ImgSize    bool     `yaml:"imgsize"`    // Whether to add width/height attributes to images
+	SvgFilter  bool     `yaml:"svgfilter"`  // Whether to process SVG files with CSS filters
 	LegacyMode bool     `yaml:"-"`          // Whether running in legacy mode (not saved to YAML)
 }
 
@@ -31,7 +32,8 @@ type ConfigFile struct {
 	Verbose   bool     `yaml:"verbose"`
 	Serve     bool     `yaml:"serve"`
 	Port      int      `yaml:"port"`
-	ImgSize   *bool    `yaml:"imgsize,omitempty"` // Pointer to handle optional field
+	ImgSize   *bool    `yaml:"imgsize,omitempty"`   // Pointer to handle optional field
+	SvgFilter *bool    `yaml:"svgfilter,omitempty"` // Pointer to handle optional field
 }
 
 // DefaultConfig returns a config with sensible defaults
@@ -44,6 +46,7 @@ func DefaultConfig() Config {
 		Serve:     false,
 		Port:      3000,
 		ImgSize:   true,    // default to enabled
+		SvgFilter: true,    // default to enabled
 	}
 }
 
@@ -102,6 +105,9 @@ func LoadConfigFromFile(projectDir string) (Config, error) {
 	if configFile.ImgSize != nil {
 		cfg.ImgSize = *configFile.ImgSize
 	}
+	if configFile.SvgFilter != nil {
+		cfg.SvgFilter = *configFile.SvgFilter
+	}
 	if configFile.Port != 0 {
 		cfg.Port = configFile.Port
 	}
@@ -126,6 +132,7 @@ func (c *Config) SaveConfigToFile() error {
 		Serve:     c.Serve,
 		Port:      c.Port,
 		ImgSize:   &c.ImgSize,
+		SvgFilter: &c.SvgFilter,
 	}
 	
 	data, err := yaml.Marshal(configFile)

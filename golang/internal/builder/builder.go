@@ -860,9 +860,16 @@ func (b *Builder) copyAssets() error {
 			return fmt.Errorf("creating directory %s: %w", filepath.Dir(outputPath), err)
 		}
 
-		// Copy the file
-		if err := b.copyFile(path, outputPath); err != nil {
-			return fmt.Errorf("copying %s to %s: %w", path, outputPath, err)
+		// Handle SVG files with filter processing if enabled
+		if b.config.SvgFilter && ext == ".svg" {
+			if err := b.processSVGFile(path, outputPath); err != nil {
+				return fmt.Errorf("processing SVG file %s: %w", path, err)
+			}
+		} else {
+			// Copy the file normally
+			if err := b.copyFile(path, outputPath); err != nil {
+				return fmt.Errorf("copying %s to %s: %w", path, outputPath, err)
+			}
 		}
 
 		if b.config.Verbose {
@@ -900,4 +907,26 @@ func (b *Builder) copyFile(src, dst string) error {
 	}
 
 	return os.Chmod(dst, sourceInfo.Mode())
+}
+
+// processSVGFile processes an SVG file with CSS filter support and writes to destination
+func (b *Builder) processSVGFile(src, dst string) error {
+	// Read the SVG file
+	content, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("reading SVG file: %w", err)
+	}
+
+	// Process CSS filters in the SVG
+	processedContent, err := processor.ProcessSVGFilters(string(content))
+	if err != nil {
+		return fmt.Errorf("processing SVG filters: %w", err)
+	}
+
+	// Write the processed content to destination
+	if err := os.WriteFile(dst, []byte(processedContent), 0644); err != nil {
+		return fmt.Errorf("writing processed SVG file: %w", err)
+	}
+
+	return nil
 }

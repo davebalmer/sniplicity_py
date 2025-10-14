@@ -29,6 +29,7 @@ func main() {
 	// Command line flags
 	var cfg config.Config
 	var imgSizeFlag string
+	var svgFilterFlag string
 	
 	flag.StringVar(&cfg.InputDir, "i", "", "source directory")
 	flag.StringVar(&cfg.InputDir, "in", "", "source directory")
@@ -43,6 +44,7 @@ func main() {
 	flag.IntVar(&cfg.Port, "p", 3000, "port for web server (default 3000)")
 	flag.IntVar(&cfg.Port, "port", 3000, "port for web server (default 3000)")
 	flag.StringVar(&imgSizeFlag, "imgsize", "", "automatically add width/height to img tags (on/off, default: on)")
+	flag.StringVar(&svgFilterFlag, "svgfilter", "", "process SVG files with CSS filters (on/off, default: on)")
 	
 	var showVersion bool
 	flag.BoolVar(&showVersion, "version", false, "show version")
@@ -78,6 +80,7 @@ func main() {
 	// Determine project directory and handle backward compatibility
 	var explicitInputDir, explicitOutputDir string
 	var explicitImgSize *bool
+	var explicitSvgFilter *bool
 	var isLegacyMode bool
 	
 	// Parse imgsize flag
@@ -92,21 +95,28 @@ func main() {
 		}
 	}
 	
+	// Parse svgfilter flag
+	if svgFilterFlag != "" {
+		switch strings.ToLower(svgFilterFlag) {
+		case "on", "true", "1", "yes":
+			explicitSvgFilter = &[]bool{true}[0]
+		case "off", "false", "0", "no":
+			explicitSvgFilter = &[]bool{false}[0]
+		default:
+			log.Fatalf("Invalid value for --svgfilter: %s (use 'on' or 'off')", svgFilterFlag)
+		}
+	}
+	
 	// Project directory determination
 	var projectDir string
 	var err error
 	
 	// Check for any explicit command line flags that indicate legacy usage
-	isLegacyMode = cfg.InputDir != "" || cfg.OutputDir != "" || cfg.Watch || cfg.Verbose || cfg.Port != 3000 || explicitImgSize != nil
+	isLegacyMode = cfg.InputDir != "" || cfg.OutputDir != "" || cfg.Watch || cfg.Verbose || cfg.Port != 3000 || explicitImgSize != nil || explicitSvgFilter != nil
 	
 	// Special case: if only -s (serve) flag is provided, treat as project selection mode, not legacy mode
-	if cfg.Serve && cfg.InputDir == "" && cfg.OutputDir == "" && !cfg.Watch && !cfg.Verbose && cfg.Port == 3000 && explicitImgSize == nil {
+	if cfg.Serve && cfg.InputDir == "" && cfg.OutputDir == "" && !cfg.Watch && !cfg.Verbose && cfg.Port == 3000 && explicitImgSize == nil && explicitSvgFilter == nil {
 		isLegacyMode = false
-	}
-	
-	// If no flags at all were provided, start in project selection mode with serve enabled
-	if !isLegacyMode && !cfg.Serve {
-		cfg.Serve = true
 	}
 	
 	if cfg.InputDir != "" || cfg.OutputDir != "" {
@@ -172,20 +182,42 @@ func main() {
 			fileCfg.OutputDir = explicitOutputDir // Keep absolute
 		}
 	}
-	if cfg.Watch {
-		fileCfg.Watch = cfg.Watch
-	}
-	if cfg.Verbose {
-		fileCfg.Verbose = cfg.Verbose
-	}
-	if cfg.Serve {
+	
+	// In legacy mode, command line flags completely override config file
+	if isLegacyMode {
+		// In legacy mode, serve defaults to false unless explicitly set
 		fileCfg.Serve = cfg.Serve
-	}
-	if cfg.Port != 3000 { // Only override if explicitly set
-		fileCfg.Port = cfg.Port
-	}
-	if explicitImgSize != nil {
-		fileCfg.ImgSize = *explicitImgSize
+		fileCfg.Watch = cfg.Watch
+		fileCfg.Verbose = cfg.Verbose
+		if cfg.Port != 3000 { // Only override if explicitly set
+			fileCfg.Port = cfg.Port
+		}
+		if explicitImgSize != nil {
+			fileCfg.ImgSize = *explicitImgSize
+		}
+		if explicitSvgFilter != nil {
+			fileCfg.SvgFilter = *explicitSvgFilter
+		}
+	} else {
+		// In project mode, only override if explicitly set
+		if cfg.Watch {
+			fileCfg.Watch = cfg.Watch
+		}
+		if cfg.Verbose {
+			fileCfg.Verbose = cfg.Verbose
+		}
+		if cfg.Serve {
+			fileCfg.Serve = cfg.Serve
+		}
+		if cfg.Port != 3000 { // Only override if explicitly set
+			fileCfg.Port = cfg.Port
+		}
+		if explicitImgSize != nil {
+			fileCfg.ImgSize = *explicitImgSize
+		}
+		if explicitSvgFilter != nil {
+			fileCfg.SvgFilter = *explicitSvgFilter
+		}
 	}
 	
 	cfg = fileCfg
@@ -200,29 +232,16 @@ func main() {
 	
 	printBanner()
 	
+	// Handle the case where no arguments are provided - start project selection mode
+	if len(os.Args) == 1 {
+		// No arguments provided, start in project selection mode with serve enabled
+		cfg.Serve = true
+		cfg.Watch = true
+		isLegacyMode = false
+	}
+	
 	// In project selection mode (non-legacy with serve), skip project validation and building
 	if !isLegacyMode && cfg.Serve {
-		// Try to load config from current working directory if it has a sniplicity.yaml file
-		wd, err := os.Getwd()
-		if err == nil {
-			configPath := filepath.Join(wd, "sniplicity.yaml")
-			if _, err := os.Stat(configPath); err == nil {
-				// Config file exists in working directory, load it
-				if workingDirCfg, err := config.LoadConfigFromFile(wd); err == nil {
-					// If config was successfully loaded from working directory, use it
-					// but preserve the serve flag and other command-line overrides
-					workingDirCfg.Serve = cfg.Serve
-					if cfg.Port != 3000 {
-						workingDirCfg.Port = cfg.Port
-					}
-					if cfg.Verbose {
-						workingDirCfg.Verbose = cfg.Verbose
-					}
-					cfg = workingDirCfg
-				}
-			}
-		}
-		
 		// Start directly in web server mode for project selection
 		var b *builder.Builder
 		if explicitServeFlag {

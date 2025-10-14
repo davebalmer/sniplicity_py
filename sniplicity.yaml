@@ -1,0 +1,9 @@
+name: "Ludonode Website"
+input_dir: "/Users/dbalmer/Projects/ludonode/website/snip"
+output_dir: "/Users/dbalmer/Projects/ludonode/website/www"
+watch: true
+verbose: true
+serve: true
+port: 3000
+imgsize: true
+svgfilter: true
