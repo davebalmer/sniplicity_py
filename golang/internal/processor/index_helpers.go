@@ -77,7 +77,7 @@ func (p *Processor) parseDateToTimestamp(dateStr string) float64 {
 }
 
 // processIndexTemplate processes template for a single file in the index like Python's process_index_template
-func (p *Processor) processIndexTemplate(templateContent []string, fileMetadata map[string]interface{}, snippets map[string][]string) string {
+func (p *Processor) processIndexTemplate(templateContent []string, fileMetadata map[string]interface{}, snippets map[string][]string, globals map[string]string) string {
 	// Work with a fresh copy of the template
 	templateLines := make([]string, len(templateContent))
 	copy(templateLines, templateContent)
@@ -95,7 +95,7 @@ func (p *Processor) processIndexTemplate(templateContent []string, fileMetadata 
 				for k, v := range fileMetadata {
 					fileVars[k] = fmt.Sprintf("%v", v)
 				}
-				processedSnippet := ProcessContentWithDirectives(snippetText, fileVars, fileVars)
+				processedSnippet := ProcessContentWithDirectives(snippetText, fileVars, globals)
 				processedLines = append(processedLines, strings.Split(processedSnippet, "\n")...)
 			} else {
 				if p.verbose {
@@ -118,7 +118,7 @@ func (p *Processor) processIndexTemplate(templateContent []string, fileMetadata 
 	}
 	
 	// Process all variables and directives
-	result := ProcessContentWithDirectives(templateStr, fileVars, fileVars)
+	result := ProcessContentWithDirectives(templateStr, fileVars, globals)
 	
 	return result
 }

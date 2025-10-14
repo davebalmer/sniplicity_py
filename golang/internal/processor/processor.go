@@ -238,7 +238,7 @@ func (p *Processor) ProcessIndexCommands(fileInfo *types.FileInfo, inputDir stri
 			
 			// Generate HTML for each file using the template
 			for _, fileMeta := range fileData {
-				indexHTML := p.processIndexTemplate(templates[templateName], fileMeta, snippets)
+				indexHTML := p.processIndexTemplate(templates[templateName], fileMeta, snippets, globals)
 				newContent = append(newContent, strings.Split(indexHTML, "\n")...)
 			}
 		} else {
